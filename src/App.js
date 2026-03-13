@@ -7,6 +7,8 @@ import {
   getKnownPlayers, savePlayerName,
   fetchBatch, scoreGuess, maxPoints,
   getLeaderboard, addLeaderboardEntry, clearLeaderboard,
+  getDifficulty, setDifficulty,
+  addReport,
 } from './gameService';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -43,6 +45,64 @@ function Btn({ color = '#f59e0b', fill = false, onClick, children, style = {}, d
 }
 
 const lbl = { fontSize: 11, letterSpacing: 5, textTransform: 'uppercase', color: '#f59e0b' };
+
+// ── REPORT MODAL ──────────────────────────────────────────────────────────────
+const REPORT_REASONS = [
+  'Wrong image for this item',
+  'Image won\'t load / broken link',
+  'Text or watermark covering photo',
+  'Inappropriate or offensive content',
+  'Other',
+];
+
+function ReportModal({ item, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  const [note, setNote] = useState('');
+  const [done, setDone] = useState(false);
+
+  const submit = () => {
+    if (!reason) return;
+    onSubmit(reason, note);
+    setDone(true);
+    setTimeout(onClose, 1400);
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 }}>
+      <div style={{ background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, padding: '24px 22px', maxWidth: 420, width: '100%' }}>
+        {done ? (
+          <div style={{ textAlign: 'center', padding: '16px 0' }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
+            <div style={{ color: '#4ade80', fontSize: 15 }}>Thanks for the report!</div>
+          </div>
+        ) : (
+          <>
+            <div style={lbl}>Report Bad Photo</div>
+            <div style={{ color: T.text, fontSize: 15, margin: '6px 0 18px', fontFamily: T.font }}>"{item?.name}"</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
+              {REPORT_REASONS.map(r => (
+                <div key={r} onClick={() => setReason(r)}
+                  style={{ padding: '10px 13px', border: `1px solid ${reason === r ? '#f59e0b' : T.border}`, borderRadius: 3, cursor: 'pointer', background: reason === r ? '#f59e0b12' : 'transparent', color: reason === r ? '#f59e0b' : T.muted, fontSize: 13, transition: 'all .15s' }}>
+                  {reason === r ? '◉' : '○'} {r}
+                </div>
+              ))}
+            </div>
+            {reason === 'Other' && (
+              <textarea value={note} onChange={e => setNote(e.target.value)}
+                placeholder="Describe the issue..."
+                rows={2}
+                style={{ width: '100%', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, padding: '9px 11px', fontSize: 13, borderRadius: 3, fontFamily: T.font, outline: 'none', resize: 'none', marginBottom: 12, boxSizing: 'border-box' }} />
+            )}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+              <Btn color={T.border2} onClick={onClose} style={{ padding: '8px 18px' }}>Cancel</Btn>
+              <Btn fill color='#ef4444' onClick={submit} disabled={!reason} style={{ padding: '8px 18px' }}>Submit</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API KEY SETUP
@@ -325,6 +385,7 @@ function GameScreen({ config, onHome }) {
   const [streak, setStreak]     = useState(0);
   const [bestStreak, setBest]   = useState(0);
   const [maxPoss, setMaxPoss]   = useState(0);
+  const [reporting, setReporting] = useState(false);
 
   const bgFetchRef = useRef(false);
 
@@ -625,6 +686,25 @@ function GameScreen({ config, onHome }) {
         </>
       )}
 
+      {/* Report button */}
+      {(phase === 'playing' || phase === 'revealed') && item && (
+        <div style={{ textAlign: 'right', marginBottom: 4 }}>
+          <button onClick={() => setReporting(true)}
+            style={{ background: 'none', border: 'none', color: T.dim, fontSize: 10, cursor: 'pointer', letterSpacing: 2, textTransform: 'uppercase' }}>
+            ⚑ Report Photo
+          </button>
+        </div>
+      )}
+
+      {/* Report modal */}
+      {reporting && item && (
+        <ReportModal
+          item={item}
+          onClose={() => setReporting(false)}
+          onSubmit={(reason, note) => addReport(item, reason, note)}
+        />
+      )}
+
       {/* Revealed */}
       {phase === 'revealed' && rpts && (
         <>
@@ -660,7 +740,10 @@ function GameScreen({ config, onHome }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function SettingsScreen({ onBack }) {
   const [msg, setMsg] = useState('');
+  const [diff, setDiff] = useState(getDifficulty());
   const act = (fn, m) => { fn(); setMsg(m); setTimeout(() => setMsg(''), 2000); };
+
+  const changeDiff = (d) => { setDifficulty(d); setDiff(d); setMsg('✓ Difficulty saved!'); setTimeout(() => setMsg(''), 2000); };
   return (
     <div style={{ maxWidth: 460, margin: '0 auto' }}>
       <button onClick={onBack} style={{ background: 'none', border: 'none', color: T.dim, cursor: 'pointer', fontSize: 11, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 24 }}>← Back</button>
@@ -668,6 +751,20 @@ function SettingsScreen({ onBack }) {
       <h2 style={{ fontSize: 32, fontWeight: 400, letterSpacing: -1, margin: '6px 0 22px', fontFamily: T.font }}>Game Settings</h2>
       {msg && <div style={{ color: '#4ade80', fontSize: 13, marginBottom: 14, textAlign: 'center' }}>{msg}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Difficulty */}
+        <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
+          <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>Difficulty</div>
+          <div style={{ color: T.muted, fontSize: 12, marginBottom: 12 }}>Controls how famous/obscure items Claude picks</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[{ id: 'easy', label: '😊 Easy' }, { id: 'medium', label: '🧠 Medium' }, { id: 'hard', label: '💀 Hard' }].map(d => (
+              <button key={d.id} onClick={() => changeDiff(d.id)}
+                style={{ flex: 1, padding: '9px 8px', border: `1px solid ${diff === d.id ? '#f59e0b' : T.border2}`, borderRadius: 3, background: diff === d.id ? '#f59e0b18' : 'transparent', color: diff === d.id ? '#f59e0b' : T.muted, fontSize: 12, cursor: 'pointer', fontFamily: T.font, letterSpacing: 1 }}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
           <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>Clear All History</div>
           <div style={{ color: T.muted, fontSize: 12, marginBottom: 10 }}>See previously seen items again</div>

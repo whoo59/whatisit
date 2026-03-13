@@ -6,6 +6,8 @@ const KEY_SEEN        = (id) => `wit_seen_${id}`;
 const KEY_SOLO        = 'wit_soloStats';
 const KEY_PLAYERS     = 'wit_knownPlayers';
 const KEY_LEADERBOARD = 'wit_leaderboard';
+const KEY_DIFFICULTY  = 'wit_difficulty';
+const KEY_REPORTS     = 'wit_reports';
 
 export const getApiKey   = () => localStorage.getItem(KEY_API) || '';
 export const saveApiKey  = (k) => localStorage.setItem(KEY_API, k);
@@ -68,6 +70,24 @@ export function clearLeaderboard() {
   localStorage.removeItem(KEY_LEADERBOARD);
 }
 
+// ── Difficulty ────────────────────────────────────────────────────────────────
+export const getDifficulty = () => localStorage.getItem(KEY_DIFFICULTY) || 'medium';
+export const setDifficulty = (d) => localStorage.setItem(KEY_DIFFICULTY, d);
+
+// ── Reports (never cleared with history resets) ───────────────────────────────
+export function getReports() {
+  try { return JSON.parse(localStorage.getItem(KEY_REPORTS) || '[]'); }
+  catch { return []; }
+}
+export function addReport(item, reason, note = '') {
+  const reports = getReports();
+  reports.push({ name: item.name, wikiTitle: item.wikiTitle, reason, note, date: Date.now() });
+  localStorage.setItem(KEY_REPORTS, JSON.stringify(reports.slice(-500)));
+}
+export function getReportedNames() {
+  return getReports().map(r => r.name);
+}
+
 // ── Wikipedia thumbnail ───────────────────────────────────────────────────────
 const BAD_KEYWORDS = ['map', 'range', 'distribution', 'diagram', 'illustration', 'drawing',
   'sketch', 'logo', 'flag', 'coat_of_arms', 'chart', 'graph', 'blank', 'outline',
@@ -119,16 +139,26 @@ async function getWikiThumbnail(wikiTitle) {
 }
 
 // ── Fetch a batch of items ────────────────────────────────────────────────────
+const DIFFICULTY_INSTRUCTIONS = {
+  easy:   'DIFFICULTY BIAS: Generate mostly famous, well-known items that most people would recognize. At least 2 out of every 3 items should be difficulty 1. Max 1 difficulty 3 item per batch.',
+  medium: 'DIFFICULTY BIAS: Mix of difficulties — roughly equal split between difficulty 1, 2, and 3.',
+  hard:   'DIFFICULTY BIAS: Lean toward obscure and challenging items. At least 2 out of every 3 items should be difficulty 2 or 3.',
+};
+
 export async function fetchBatch(apiKey, categoryId, count = 3) {
   const cat = getCategoryById(categoryId);
   if (!cat) throw new Error('Unknown category');
 
   const seen = getSeen(categoryId);
-  const seenNote = seen.length > 0
-    ? `\n\nCRITICAL: Do NOT include any of these already-seen items: ${seen.slice(-80).join(', ')}.`
+  const reported = getReportedNames();
+  const blocklist = [...new Set([...seen.slice(-80), ...reported])];
+  const seenNote = blocklist.length > 0
+    ? `\n\nCRITICAL: Do NOT include any of these items: ${blocklist.join(', ')}.`
     : '';
 
-  const prompt = cat.prompt.replace('{count}', count) + seenNote + `
+  const difficultyNote = '\n\n' + (DIFFICULTY_INSTRUCTIONS[getDifficulty()] || DIFFICULTY_INSTRUCTIONS.medium);
+
+  const prompt = cat.prompt.replace('{count}', count) + seenNote + difficultyNote + `
 
 Respond with ONLY a valid JSON array. No markdown, no explanation, no code fences. Each object must have EXACTLY these keys:
 {
