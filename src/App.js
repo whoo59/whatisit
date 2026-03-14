@@ -142,11 +142,53 @@ function SetupScreen({ onSave }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LEADERBOARD TICKER
+// ─────────────────────────────────────────────────────────────────────────────
+function LeaderboardTicker({ onLeaderboard }) {
+  const board = getLeaderboard().sort((a, b) => b.score - a.score);
+  const [idx, setIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    if (board.length <= 1) return;
+    const iv = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => { setIdx(i => (i + 1) % board.length); setVisible(true); }, 380);
+    }, 3500);
+    return () => clearInterval(iv);
+  }, [board.length]);
+
+  if (board.length === 0) return null;
+  const e = board[idx];
+  const cat = getCategoryById(e.categoryId);
+  const medals = ['🥇', '🥈', '🥉'];
+  const pct = e.maxPossible > 0 ? Math.round(e.score / e.maxPossible * 100) : 0;
+
+  return (
+    <div onClick={onLeaderboard} style={{ cursor: 'pointer', marginBottom: 16, padding: '10px 16px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg2, display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', color: '#f59e0b', flexShrink: 0 }}>🏆 Scores</div>
+      <div style={{ flex: 1, opacity: visible ? 1 : 0, transition: 'opacity 0.35s ease', display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, overflow: 'hidden' }}>
+        <span style={{ fontSize: idx < 3 ? 15 : 11, flexShrink: 0 }}>{idx < 3 ? medals[idx] : `#${idx + 1}`}</span>
+        <span style={{ fontSize: 14, color: T.text, fontFamily: T.font, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.player}</span>
+        <span style={{ fontSize: 18, fontWeight: 300, color: '#f59e0b', fontFamily: T.font, flexShrink: 0 }}>{e.score}</span>
+        <span style={{ fontSize: 11, color: T.muted, flexShrink: 0 }}>{cat?.emoji} {cat?.name}</span>
+        {e.difficulty && e.difficulty !== 'medium' && (
+          <span style={{ fontSize: 10, color: e.difficulty === 'hard' ? '#ef4444' : '#10b981', flexShrink: 0 }}>
+            {e.difficulty === 'hard' ? '💀' : '😊'}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: T.dim, marginLeft: 'auto', flexShrink: 0 }}>{pct}%</span>
+      </div>
+      <div style={{ fontSize: 10, color: T.dim, letterSpacing: 1, flexShrink: 0 }}>See All →</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HOME
 // ─────────────────────────────────────────────────────────────────────────────
 function HomeScreen({ onSelect, onSettings, onLeaderboard }) {
   const stats = getSoloStats();
-  const topScores = getLeaderboard().sort((a, b) => b.score - a.score).slice(0, 3);
   return (
     <div style={{ width: '100%', maxWidth: 780, position: 'relative', zIndex: 1 }}>
       <div style={{ textAlign: 'center', marginBottom: 28 }}>
@@ -172,32 +214,11 @@ function HomeScreen({ onSelect, onSettings, onLeaderboard }) {
           );
         })}
       </div>
-      {/* Mini leaderboard */}
-      {topScores.length > 0 && (
-        <div style={{ marginBottom: 16, padding: '12px 16px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg2 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: '#f59e0b' }}>🏆 Top Scores</div>
-            <button onClick={onLeaderboard} style={{ background: 'none', border: 'none', color: T.dim, fontSize: 10, cursor: 'pointer', letterSpacing: 2, textTransform: 'uppercase' }}>See All →</button>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {topScores.map((e, i) => {
-              const cat = getCategoryById(e.categoryId);
-              const medals = ['🥇','🥈','🥉'];
-              return (
-                <div key={i} style={{ flex: 1, textAlign: 'center', padding: '8px 6px', borderRadius: 4, background: `${T.bg3}` }}>
-                  <div style={{ fontSize: 16 }}>{medals[i]}</div>
-                  <div style={{ fontSize: 13, color: T.text, fontFamily: T.font, marginTop: 2 }}>{e.player}</div>
-                  <div style={{ fontSize: 18, fontWeight: 300, fontFamily: T.font, color: '#f59e0b' }}>{e.score}</div>
-                  <div style={{ fontSize: 10, color: T.dim }}>{cat?.emoji} {cat?.name}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Animated leaderboard ticker */}
+      <LeaderboardTicker onLeaderboard={onLeaderboard} />
 
       <div style={{ textAlign: 'center', display: 'flex', gap: 20, justifyContent: 'center' }}>
-        {topScores.length === 0 && <button onClick={onLeaderboard} style={{ background: 'none', border: 'none', color: T.dim, fontSize: 11, cursor: 'pointer', letterSpacing: 3, textTransform: 'uppercase' }}>🏆 Leaderboard</button>}
+        <button onClick={onLeaderboard} style={{ background: 'none', border: 'none', color: T.dim, fontSize: 11, cursor: 'pointer', letterSpacing: 3, textTransform: 'uppercase' }}>🏆 Leaderboard</button>
         <button onClick={onSettings} style={{ background: 'none', border: 'none', color: T.dim, fontSize: 11, cursor: 'pointer', letterSpacing: 3, textTransform: 'uppercase' }}>⚙ Settings</button>
       </div>
     </div>

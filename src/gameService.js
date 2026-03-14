@@ -162,6 +162,28 @@ export async function fetchFreshImage(wikiTitle, excludeUrl = '') {
   return getWikiThumbnail(wikiTitle, excludeUrl);
 }
 
+// ── iNaturalist thumbnail (fallback for creature categories) ──────────────────
+async function getINaturalistImage(speciesName) {
+  try {
+    const res = await fetch(
+      `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(speciesName)}&rank=species,subspecies,genus&photos=true&per_page=3`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return '';
+    const data = await res.json();
+    const taxon = data.results?.[0];
+    if (!taxon) return '';
+    // Prefer taxon_photos array, fall back to default_photo
+    const photos = taxon.taxon_photos?.map(tp => tp.photo) || [];
+    const photo = photos[0] || taxon.default_photo;
+    if (!photo?.url) return '';
+    // Replace 'square' size with 'large' for better quality
+    return photo.url.replace('/square.', '/large.').replace('square.', 'large.');
+  } catch {
+    return '';
+  }
+}
+
 // ── Fetch a batch of items ────────────────────────────────────────────────────
 const DIFFICULTY_INSTRUCTIONS = {
   easy:   'DIFFICULTY BIAS: Generate mostly famous, well-known items that most people would recognize. At least 2 out of every 3 items should be difficulty 1. Max 1 difficulty 3 item per batch.',
@@ -226,12 +248,18 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
 
   const items = JSON.parse(raw);
 
-  // Fetch real Wikipedia thumbnails for each item
+  // Categories that use iNaturalist as fallback image source
+  const INAT_CATEGORIES = ['animals'];
+
+  // Fetch thumbnails — Wikimedia primary, iNaturalist fallback for creature categories
   const withImages = await Promise.all(
-    items.map(async item => ({
-      ...item,
-      image: await getWikiThumbnail(item.wikiTitle || item.name),
-    }))
+    items.map(async item => {
+      let image = await getWikiThumbnail(item.wikiTitle || item.name);
+      if (!image && INAT_CATEGORIES.includes(categoryId)) {
+        image = await getINaturalistImage(item.name);
+      }
+      return { ...item, image };
+    })
   );
 
   addSeen(categoryId, withImages.map(i => i.name));
