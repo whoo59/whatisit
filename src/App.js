@@ -704,7 +704,7 @@ function GameScreen({ config, onHome }) {
       )}
 
       {/* Photo */}
-      <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: 4, overflow: 'hidden', background: T.bg3, marginBottom: 16 }}>
+      <div style={{ position: 'relative', width: '100%', aspectRatio: phase === 'revealed' ? '16/9' : '16/9', minHeight: phase === 'revealed' ? 240 : undefined, borderRadius: 4, overflow: 'hidden', background: T.bg3, marginBottom: 16 }}>
         {imgSt !== 'loaded' && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 10 }}>
             {imgSt === 'loading' && <Spinner color={cat.color} />}
@@ -726,9 +726,23 @@ function GameScreen({ config, onHome }) {
           </div>
         )}
         {phase === 'revealed' && (
-          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent,rgba(0,0,0,.85))', padding: '24px 14px 10px' }}>
-            <div style={{ color: T.muted, fontSize: 10, letterSpacing: 3, textTransform: 'uppercase' }}>The Answer</div>
-            <div style={{ color: T.text, fontSize: 'clamp(13px,2.5vw,20px)', fontFamily: T.font }}>{item?.name}</div>
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(5,7,14,0.97) 0%, rgba(5,7,14,0.88) 40%, rgba(5,7,14,0.55) 70%, rgba(5,7,14,0.2) 100%)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: '18px 16px 16px', overflow: 'hidden' }}>
+            <div style={{ color: cat.color, fontSize: 9, letterSpacing: 4, textTransform: 'uppercase', marginBottom: 4 }}>The Answer</div>
+            <div style={{ color: T.text, fontSize: 'clamp(15px,3vw,26px)', fontFamily: T.font, lineHeight: 1.2, marginBottom: 8 }}>{item?.name}</div>
+            {item?.tags && item.tags.length > 0 && (
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 9 }}>
+                {item.tags.map((tag, i) => (
+                  <span key={i} style={{ padding: '2px 9px', background: `${cat.color}28`, border: `1px solid ${cat.color}50`, borderRadius: 20, fontSize: 10, color: cat.color, letterSpacing: 1 }}>
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {item?.funFact && (
+              <div style={{ color: 'rgba(220,215,205,0.88)', fontSize: 12, lineHeight: 1.65 }}>
+                {item.funFact}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -844,21 +858,6 @@ function GameScreen({ config, onHome }) {
             </div>
           )}
 
-          {/* Tags */}
-          {item?.tags && item.tags.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-              {item.tags.map((tag, i) => (
-                <span key={i} style={{ padding: '3px 10px', background: `${cat.color}18`, border: `1px solid ${cat.color}40`, borderRadius: 20, fontSize: 11, color: cat.color, letterSpacing: 1 }}>
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Fun fact — always shown */}
-          <div style={{ padding: '13px 15px', background: T.bg2, borderLeft: `2px solid ${cat.color}`, marginBottom: 12, color: '#b8b2a6', lineHeight: 1.75, fontSize: 14 }}>
-            ✦ {item?.funFact}
-          </div>
           <div style={{ textAlign: 'center' }}>
             <Btn onClick={nextQuestion}>Next → <span style={{ fontSize: 9, opacity: 0.5 }}>(Enter)</span></Btn>
           </div>

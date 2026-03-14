@@ -301,7 +301,7 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
   "imageAlt": "One sentence describing what the photo shows",
   "hints": ["vague hint", "slightly more specific", "nearly gives it away"],
   "tags": ["3-5 short descriptor chips, e.g. Mammal | Endangered | East Africa | Felidae family"],
-  "funFact": "4-5 rich educational sentences. Cover: (1) precise location and context — country, region, habitat; (2) what KIND of thing this is — for animals: class + family + diet/adaptations, for places: geological/architectural type, for food: main ingredients + cooking method; (3) historical or cultural significance; (4) relationship to similar things — related species, nearby landmarks, similar dishes; (5) one genuinely surprising or little-known fact."
+  "funFact": "2-3 punchy sentences max. Hit: what kind of thing it is and where, one key fact about why it matters or what makes it special, and one genuinely surprising detail. No filler."
 }`;
 
   // Call our server-side proxy instead of Anthropic directly
