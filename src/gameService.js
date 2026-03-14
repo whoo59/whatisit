@@ -93,26 +93,22 @@ export function addPlayerAnswer(playerId, catId, item, guess, score) {
   }).catch(() => {}); // silently ignore if offline
 }
 
-// Fetch ghost's answers from server, populate local cache so getGhostAnswer() works sync
-export async function fetchGhostAnswers(ghostId, catId) {
-  if (!ghostId) return;
+// Fetch all players who have previously answered a specific item (auto ghost mode).
+// excludePlayers: array of player names currently in the game (exclude their own answers).
+// Returns [{ player, guess, score }, ...]
+export async function fetchGhostsForItem(item, excludePlayers = []) {
+  const wikiTitle = item.wikiTitle || item.name;
+  const exclude = excludePlayers.map(p => encodeURIComponent(p)).join(',');
   try {
-    const res = await fetch(`/api/answers?playerId=${encodeURIComponent(ghostId)}&catId=${encodeURIComponent(catId)}`);
-    if (!res.ok) return;
-    const answers = await res.json();
-    if (Array.isArray(answers) && answers.length > 0) {
-      setLocalAnswers(ghostId, catId, answers);
-    }
-  } catch {}
-}
-
-// Sync lookup from local cache (populated by fetchGhostAnswers at game start)
-export function getGhostAnswer(ghostId, catId, item) {
-  if (!ghostId) return null;
-  const answers = getLocalAnswers(ghostId, catId);
-  return answers.find(a => item.wikiTitle && a.wikiTitle && a.wikiTitle === item.wikiTitle)
-      || answers.find(a => a.name === item.name)
-      || null;
+    const res = await fetch(
+      `/api/ghosts?wikiTitle=${encodeURIComponent(wikiTitle)}&exclude=${exclude}`
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Solo stats ────────────────────────────────────────────────────────────────
@@ -303,7 +299,7 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
   "close": ["country name", "closely related terms — nearby countries, closely related species or dish type"],
   "ballpark": ["continent", "broad category — must be genuinely vague/broad, like 'big cat' or 'reef' or 'South American food' or 'island'"],
   "imageAlt": "One sentence describing what the photo shows",
-  "hints": ["vague hint", "slightly more specific", "more specific", "nearly gives it away"],
+  "hints": ["vague hint", "slightly more specific", "nearly gives it away"],
   "tags": ["3-5 short descriptor chips, e.g. Mammal | Endangered | East Africa | Felidae family"],
   "funFact": "4-5 rich educational sentences. Cover: (1) precise location and context — country, region, habitat; (2) what KIND of thing this is — for animals: class + family + diet/adaptations, for places: geological/architectural type, for food: main ingredients + cooking method; (3) historical or cultural significance; (4) relationship to similar things — related species, nearby landmarks, similar dishes; (5) one genuinely surprising or little-known fact."
 }`;

@@ -9,7 +9,7 @@ import {
   getDifficulty, setDifficulty,
   addReport,
   fetchFreshImage, getCroppedBadUrls, addCroppedBadUrl,
-  addPlayerAnswer, getGhostAnswer, fetchGhostAnswers,
+  addPlayerAnswer, fetchGhostsForItem,
 } from './gameService';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -311,7 +311,6 @@ function ModeScreen({ categoryId, onStart, onBack }) {
   const [mode, setMode] = useState(null);
   const [playerCount, setPlayerCount] = useState(2);
   const [names, setNames] = useState(['', '', '', '']);
-  const [ghostName, setGhostName] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(null);
   const [localDiff, setLocalDiff] = useState(() => getDifficulty());
   const known = getKnownPlayers();
@@ -325,7 +324,7 @@ function ModeScreen({ categoryId, onStart, onBack }) {
     const finalNames = activeNames.map(n => n.trim());
     finalNames.forEach(savePlayerName);
     setDifficulty(localDiff);
-    onStart({ mode, players: finalNames, categoryId, difficulty: localDiff, ghostPlayer: mode === 'solo' ? ghostName : '' });
+    onStart({ mode, players: finalNames, categoryId, difficulty: localDiff });
   };
 
   if (!mode) return (
@@ -390,30 +389,6 @@ function ModeScreen({ categoryId, onStart, onBack }) {
           </div>
         ))}
       </div>
-      {/* Ghost picker — solo only, only shown if other players exist */}
-      {mode === 'solo' && (() => {
-        const myName = names[0].trim() || defaults[0];
-        const others = known.filter(k => k !== myName);
-        if (others.length === 0) return null;
-        return (
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.muted, marginBottom: 8, textAlign: 'center' }}>Challenge a Ghost?</div>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
-              <div onClick={() => setGhostName('')}
-                style={{ padding: '8px 14px', border: `1px solid ${!ghostName ? cat.color : T.border}`, borderRadius: 3, cursor: 'pointer', background: !ghostName ? `${cat.color}18` : 'transparent', fontSize: 12, color: !ghostName ? cat.color : T.muted, transition: 'all .15s' }}>
-                Solo Only
-              </div>
-              {others.map(k => (
-                <div key={k} onClick={() => setGhostName(ghostName === k ? '' : k)}
-                  style={{ padding: '8px 14px', border: `1px solid ${ghostName === k ? '#8b5cf6' : T.border}`, borderRadius: 3, cursor: 'pointer', background: ghostName === k ? '#8b5cf618' : 'transparent', fontSize: 12, color: ghostName === k ? '#8b5cf6' : T.muted, transition: 'all .15s' }}>
-                  👻 {k}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
-
       {/* Difficulty picker */}
       <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.muted, marginBottom: 10, textAlign: 'center' }}>Difficulty</div>
@@ -446,7 +421,7 @@ const CHECKPOINT = 10;
 const DIFF_MULT = { easy: 1, medium: 1.5, hard: 2 };
 
 function GameScreen({ config, onHome }) {
-  const { mode, players, categoryId, difficulty = 'medium', ghostPlayer = '' } = config;
+  const { mode, players, categoryId, difficulty = 'medium' } = config;
   const cat = getCategoryById(categoryId);
   const isSolo = mode === 'solo';
   const mult = DIFF_MULT[difficulty] || 1;
@@ -471,7 +446,7 @@ function GameScreen({ config, onHome }) {
   const [maxPoss, setMaxPoss]   = useState(0);
   const [reporting, setReporting] = useState(false);
   const [croppedUrls, setCroppedUrls] = useState(() => getCroppedBadUrls());
-  const [ghostComparison, setGhostComparison] = useState([]);
+  const [itemGhosts, setItemGhosts] = useState(null); // null=not fetched, []=no ghosts, [...]
 
   const bgFetchRef = useRef(false);
   const playerNameRef = useRef(players[0]);
@@ -493,10 +468,8 @@ function GameScreen({ config, onHome }) {
     }
   };
 
-  // Prefetch ghost answers from server into localStorage so reveal() can read them sync
-  useEffect(() => {
-    if (ghostPlayer) fetchGhostAnswers(ghostPlayer, categoryId);
-  }, [ghostPlayer, categoryId]);
+  // Reset ghost display each new question
+  useEffect(() => { setItemGhosts(null); }, [localIdx]);
 
   const loadBatch = useCallback(async (initial = false) => {
     if (bgFetchRef.current) return;
@@ -528,7 +501,7 @@ function GameScreen({ config, onHome }) {
 
   // Auto-show all hints when image fails
   useEffect(() => {
-    if (imgSt === 'error' && item) setHints(item.hints?.length || 4);
+    if (imgSt === 'error' && item) setHints(item.hints?.length || 3);
   });
 
   // Enter: reveal when all locked, next question when revealed
@@ -553,30 +526,24 @@ function GameScreen({ config, onHome }) {
 
   const reveal = () => {
     const rawPts = guesses.map(g => scoreGuess(g, item));
-    const pts = rawPts.map(p => Math.round(p * mult));
+    // Hints penalty: each hint used reduces max achievable by 1 (floor 0)
+    const hintCap = Math.max(0, maxPoints() - hints);
+    const cappedPts = rawPts.map(p => Math.min(p, hintCap));
+    const pts = cappedPts.map(p => Math.round(p * mult));
     const mp = Math.round(maxPoints() * mult);
-    setRpts(pts);
+    setRpts({ raw: rawPts, capped: cappedPts, final: pts, hintCap });
     setScores(s => s.map((v, i) => v + pts[i]));
     setMaxPoss(m => m + mp);
     if (isSolo) {
-      const got = rawPts[0] >= maxPoints();
+      const got = cappedPts[0] >= maxPoints();
       const ns = got ? streak + 1 : 0;
       setStreak(ns);
       setBest(b => Math.max(b, ns));
-      // Save this answer to player history
-      addPlayerAnswer(players[0], categoryId, item, guesses[0], rawPts[0]);
-      // Check for ghost overlap
-      if (ghostPlayer) {
-        const ghostAns = getGhostAnswer(ghostPlayer, categoryId, item);
-        if (ghostAns) {
-          setGhostComparison(gc => [...gc, {
-            itemName: item.name,
-            myGuess: guesses[0], myScore: rawPts[0],
-            ghostGuess: ghostAns.guess, ghostScore: ghostAns.score,
-          }]);
-        }
-      }
     }
+    // Save answer for all solo players; fire-and-forget for VS too
+    players.forEach((p, i) => addPlayerAnswer(p, categoryId, item, guesses[i], rawPts[i]));
+    // Auto-fetch ghosts for this item (exclude current game players)
+    fetchGhostsForItem(item, players).then(ghosts => setItemGhosts(ghosts));
     setPhase('revealed');
   };
 
@@ -620,11 +587,12 @@ function GameScreen({ config, onHome }) {
     if (phase === 'loading' && queue.length > localIdx) setPhase('playing');
   }, [queue, localIdx, phase]);
 
-  const ptLabel = (p) =>
-    p >= 3 ? { t: '🎯 Nailed it! +3', c: '#4ade80' } :
-    p === 2 ? { t: '👍 Close! +2', c: '#a3e635' } :
-    p === 1 ? { t: '🌍 Ballpark! +1', c: '#f59e0b' } :
-              { t: '❌ Missed +0', c: T.dim };
+  const ptLabel = (raw, capped) => {
+    const base = raw >= 3 ? '🎯 Nailed it!' : raw === 2 ? '👍 Close!' : raw === 1 ? '🌍 Ballpark!' : '❌ Missed';
+    const penalty = raw > capped ? ` (hints: −${raw - capped})` : '';
+    const color = capped >= 3 ? '#4ade80' : capped === 2 ? '#a3e635' : capped === 1 ? '#f59e0b' : T.dim;
+    return { t: `${base} +${capped}${penalty}`, c: color };
+  };
 
   const winIdx = scores.indexOf(Math.max(...scores));
   const tied   = scores.filter(s => s === scores[winIdx]).length > 1;
@@ -692,44 +660,6 @@ function GameScreen({ config, onHome }) {
           })}
         </div>
 
-        {/* Ghost comparison */}
-        {ghostPlayer && ghostComparison.length > 0 && (() => {
-          const myTotal = ghostComparison.reduce((s, g) => s + g.myScore, 0);
-          const ghostTotal = ghostComparison.reduce((s, g) => s + g.ghostScore, 0);
-          const n = ghostComparison.length;
-          const iWon = myTotal > ghostTotal;
-          const tied2 = myTotal === ghostTotal;
-          return (
-            <div style={{ margin: '0 0 20px', padding: '14px 16px', border: `1px solid #8b5cf640`, borderRadius: 4, background: '#8b5cf607', textAlign: 'left' }}>
-              <div style={{ color: '#8b5cf6', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
-                👻 VS {ghostPlayer} — {n} Shared {n === 1 ? 'Question' : 'Questions'}
-              </div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
-                <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', border: `1px solid ${PC[0]}40`, borderRadius: 3, background: `${PC[0]}07` }}>
-                  <div style={{ color: PC[0], fontSize: 9, letterSpacing: 3, marginBottom: 2 }}>YOU</div>
-                  <div style={{ fontSize: 28, fontFamily: T.font, color: T.text, lineHeight: 1 }}>{myTotal}</div>
-                </div>
-                <div style={{ color: T.dim, fontSize: 12 }}>VS</div>
-                <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', border: `1px solid #8b5cf640`, borderRadius: 3, background: '#8b5cf607' }}>
-                  <div style={{ color: '#8b5cf6', fontSize: 9, letterSpacing: 3, marginBottom: 2 }}>👻 {ghostPlayer.toUpperCase()}</div>
-                  <div style={{ fontSize: 28, fontFamily: T.font, color: T.text, lineHeight: 1 }}>{ghostTotal}</div>
-                </div>
-              </div>
-              <div style={{ textAlign: 'center', color: iWon ? '#4ade80' : tied2 ? T.muted : '#ef4444', fontSize: 14, marginBottom: 10 }}>
-                {iWon ? `🏆 You beat ${ghostPlayer}!` : tied2 ? '🤝 Dead even!' : `👻 ${ghostPlayer} got you this time...`}
-              </div>
-              {ghostComparison.map((g, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, padding: '6px 0', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
-                  <div style={{ flex: 1, color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.itemName}</div>
-                  <div style={{ color: g.myScore > g.ghostScore ? '#4ade80' : g.myScore === g.ghostScore ? T.muted : '#ef4444', fontSize: 11, flexShrink: 0 }}>
-                    You {g.myScore}/3
-                  </div>
-                  <div style={{ color: '#8b5cf6', fontSize: 11, flexShrink: 0 }}>Ghost {g.ghostScore}/3</div>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
 
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Btn fill color={cat.color} onClick={() => window.location.reload()}>Play Again {cat.emoji}</Btn>
@@ -807,8 +737,11 @@ function GameScreen({ config, onHome }) {
       {phase === 'playing' && item && (
         <div style={{ marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-            <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.border2 }}>Hints: {hints}/{item.hints?.length || 4}</div>
-            {hints < (item.hints?.length || 4) && (
+            <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: hints > 0 ? '#f97316' : T.border2 }}>
+              Hints: {hints}/{item.hints?.length || 3}
+              {hints > 0 && <span style={{ color: hints >= maxPoints() ? '#ef4444' : '#f97316', marginLeft: 6 }}>· max {Math.max(0, maxPoints() - hints)}pt</span>}
+            </div>
+            {hints < (item.hints?.length || 3) && (
               <Btn color={T.border2} onClick={() => setHints(h => h + 1)} style={{ padding: '4px 11px', fontSize: 10 }}>+ Hint</Btn>
             )}
           </div>
@@ -882,7 +815,7 @@ function GameScreen({ config, onHome }) {
         <>
           <div style={{ display: 'flex', gap: 9, marginBottom: 10, flexWrap: 'wrap' }}>
             {players.map((player, pi) => {
-              const l = ptLabel(rpts[pi]);
+              const l = ptLabel(rpts.raw[pi], rpts.capped[pi]);
               const pc = PC[pi % 4];
               return (
                 <div key={pi} style={{ flex: 1, minWidth: 150, padding: '11px 13px', border: `1px solid ${pc}40`, borderRadius: 3, background: `${pc}07` }}>
@@ -895,19 +828,21 @@ function GameScreen({ config, onHome }) {
             })}
           </div>
 
-          {/* Ghost answer — shown when playing against a ghost */}
-          {ghostPlayer && (() => {
-            const ghostAns = getGhostAnswer(ghostPlayer, categoryId, item);
-            if (!ghostAns) return <div style={{ padding: '9px 13px', border: `1px solid #8b5cf618`, borderRadius: 3, background: '#8b5cf607', marginBottom: 9, color: '#8b5cf660', fontSize: 12, fontStyle: 'italic' }}>👻 {ghostPlayer} hasn't seen this one yet</div>;
-            const gl = ptLabel(ghostAns.score);
-            return (
-              <div style={{ padding: '11px 13px', border: `1px solid #8b5cf640`, borderRadius: 3, background: '#8b5cf607', marginBottom: 10 }}>
-                <div style={{ color: '#8b5cf6', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 4 }}>👻 {ghostPlayer}'s Answer</div>
-                <div style={{ fontStyle: 'italic', color: T.muted, fontSize: 13, marginBottom: 4 }}>"{ghostAns.guess || '(no guess)'}"</div>
-                <div style={{ color: gl.c, fontSize: 13 }}>{gl.t}</div>
-              </div>
-            );
-          })()}
+          {/* Auto ghost mode — shows any other player who answered this item */}
+          {itemGhosts && itemGhosts.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              {itemGhosts.map((g, i) => {
+                const gl = ptLabel(g.score, g.score);
+                return (
+                  <div key={i} style={{ padding: '9px 13px', border: `1px solid #8b5cf630`, borderRadius: 3, background: '#8b5cf607', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ color: '#8b5cf6', fontSize: 11, flexShrink: 0 }}>👻 {g.player}</span>
+                    <span style={{ fontStyle: 'italic', color: T.muted, fontSize: 13, flex: 1 }}>"{g.guess || '(no guess)'}"</span>
+                    <span style={{ color: gl.c, fontSize: 12, flexShrink: 0 }}>{gl.t}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Tags */}
           {item?.tags && item.tags.length > 0 && (
