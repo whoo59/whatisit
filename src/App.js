@@ -1,16 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CATEGORIES, getCategoryById } from './categories';
 import {
-  getApiKey, saveApiKey, clearApiKey,
   getSeen, clearSeen, clearAllSeen, countSeenForCategory,
   getSoloStats, updateSoloStats,
   getKnownPlayers, savePlayerName,
   fetchBatch, scoreGuess, maxPoints,
-  getLeaderboard, addLeaderboardEntry, clearLeaderboard,
+  fetchLeaderboard, addLeaderboardEntry, clearLeaderboard,
   getDifficulty, setDifficulty,
   addReport,
   fetchFreshImage, getCroppedBadUrls, addCroppedBadUrl,
-  addPlayerAnswer, getGhostAnswer,
+  addPlayerAnswer, getGhostAnswer, fetchGhostAnswers,
 } from './gameService';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -115,40 +114,16 @@ function ReportModal({ item, onClose, onSubmit }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API KEY SETUP
-// ─────────────────────────────────────────────────────────────────────────────
-function SetupScreen({ onSave }) {
-  const [key, setKey] = useState('');
-  const [err, setErr] = useState('');
-  const save = () => {
-    if (!key.trim().startsWith('sk-ant-')) { setErr('Should start with sk-ant-'); return; }
-    saveApiKey(key.trim()); onSave(key.trim());
-  };
-  return (
-    <div style={{ textAlign: 'center', maxWidth: 460, margin: '0 auto', padding: 20 }}>
-      <div style={lbl}>One-time Setup</div>
-      <h1 style={{ fontSize: 'clamp(32px,6vw,56px)', fontWeight: 400, letterSpacing: -2, margin: '8px 0 14px', fontFamily: T.font }}>WHAT IS THAT?!</h1>
-      <p style={{ color: T.muted, fontSize: 15, lineHeight: 1.75, fontStyle: 'italic', marginBottom: 22 }}>
-        Get your API key at <strong style={{ color: T.text, fontStyle: 'normal' }}>console.anthropic.com</strong>
-      </p>
-      <input value={key} onChange={e => { setKey(e.target.value); setErr(''); }}
-        onKeyDown={e => e.key === 'Enter' && save()}
-        placeholder="sk-ant-api03-..."
-        style={{ width: '100%', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, padding: '12px 14px', fontSize: 14, borderRadius: 3, fontFamily: 'monospace', outline: 'none', marginBottom: err ? 8 : 14, boxSizing: 'border-box' }} />
-      {err && <p style={{ color: '#ef4444', fontSize: 13, marginBottom: 10 }}>{err}</p>}
-      <Btn fill onClick={save}>Start Playing</Btn>
-      <p style={{ color: T.dim, fontSize: 12, marginTop: 12 }}>~$0.01 per game session</p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // LEADERBOARD TICKER
 // ─────────────────────────────────────────────────────────────────────────────
 function LeaderboardTicker({ onLeaderboard }) {
-  const board = getLeaderboard().sort((a, b) => b.score - a.score);
+  const [board, setBoard] = useState([]);
   const [idx, setIdx] = useState(0);
   const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    fetchLeaderboard().then(data => setBoard([...data].sort((a, b) => b.score - a.score)));
+  }, []);
 
   useEffect(() => {
     if (board.length <= 1) return;
@@ -233,10 +208,14 @@ function HomeScreen({ onSelect, onSettings, onLeaderboard }) {
 function LeaderboardScreen({ onBack }) {
   const [tab, setTab] = useState('overall');
   const [msg, setMsg] = useState('');
-  const board = getLeaderboard();
+  const [board, setBoard] = useState(null); // null = loading
 
-  const entries = (tab === 'overall' ? board : board.filter(e => e.categoryId === tab))
-    .sort((a, b) => b.score - a.score)
+  useEffect(() => {
+    fetchLeaderboard().then(data => setBoard([...data].sort((a, b) => b.score - a.score)));
+  }, []);
+
+  const safeBoard = board || [];
+  const entries = (tab === 'overall' ? safeBoard : safeBoard.filter(e => e.categoryId === tab))
     .slice(0, 10);
 
   const medals = ['🥇', '🥈', '🥉'];
@@ -262,7 +241,9 @@ function LeaderboardScreen({ onBack }) {
       </div>
 
       {/* Entries */}
-      {entries.length === 0 ? (
+      {board === null ? (
+        <div style={{ textAlign: 'center', marginTop: 40 }}><Spinner color='#f59e0b' /></div>
+      ) : entries.length === 0 ? (
         <p style={{ color: T.muted, fontStyle: 'italic', textAlign: 'center', marginTop: 40 }}>No scores yet — play a game!</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -298,10 +279,15 @@ function LeaderboardScreen({ onBack }) {
         </div>
       )}
 
-      {board.length > 0 && (
+      {safeBoard.length > 0 && (
         <div style={{ textAlign: 'center', marginTop: 24 }}>
           {msg && <div style={{ color: '#4ade80', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-          <button onClick={() => { clearLeaderboard(); setMsg('✓ Cleared!'); setTimeout(() => setMsg(''), 2000); }}
+          <button onClick={async () => {
+            await clearLeaderboard();
+            setBoard([]);
+            setMsg('✓ Cleared!');
+            setTimeout(() => setMsg(''), 2000);
+          }}
             style={{ background: 'none', border: 'none', color: T.dim, fontSize: 11, cursor: 'pointer', letterSpacing: 2, textTransform: 'uppercase', textDecoration: 'underline' }}>
             Clear All Scores
           </button>
@@ -331,9 +317,12 @@ function ModeScreen({ categoryId, onStart, onBack }) {
   const known = getKnownPlayers();
   const defaults = ['You', 'Heaven', 'Player 3', 'Player 4'];
 
+  const activeNames = (mode === 'solo' ? names.slice(0, 1) : names.slice(0, playerCount));
+  const canStart = mode !== null && activeNames.every(n => n.trim().length > 0);
+
   const start = () => {
-    const finalNames = (mode === 'solo' ? names.slice(0, 1) : names.slice(0, playerCount))
-      .map((n, i) => n.trim() || defaults[i]);
+    if (!canStart) return;
+    const finalNames = activeNames.map(n => n.trim());
     finalNames.forEach(savePlayerName);
     setDifficulty(localDiff);
     onStart({ mode, players: finalNames, categoryId, difficulty: localDiff, ghostPlayer: mode === 'solo' ? ghostName : '' });
@@ -438,7 +427,12 @@ function ModeScreen({ categoryId, onStart, onBack }) {
           ))}
         </div>
       </div>
-      <Btn fill color={cat.color} onClick={start}>Let's Go {cat.emoji}</Btn>
+      {!canStart && activeNames.some(n => n.trim().length === 0) && (
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 10, fontStyle: 'italic' }}>
+          {mode === 'solo' ? 'Enter your name to continue' : 'All players need a name'}
+        </div>
+      )}
+      <Btn fill color={cat.color} onClick={start} disabled={!canStart}>Let's Go {cat.emoji}</Btn>
     </div>
   );
 }
@@ -499,12 +493,17 @@ function GameScreen({ config, onHome }) {
     }
   };
 
+  // Prefetch ghost answers from server into localStorage so reveal() can read them sync
+  useEffect(() => {
+    if (ghostPlayer) fetchGhostAnswers(ghostPlayer, categoryId);
+  }, [ghostPlayer, categoryId]);
+
   const loadBatch = useCallback(async (initial = false) => {
     if (bgFetchRef.current) return;
     bgFetchRef.current = true;
     setFetching(true);
     try {
-      const items = await fetchBatch(getApiKey(), categoryId, BATCH_SIZE, isSolo ? playerNameRef.current : null);
+      const items = await fetchBatch(categoryId, BATCH_SIZE, isSolo ? playerNameRef.current : null);
       setQueue(q => [...q, ...items]);
       if (initial) setPhase('playing');
     } catch(e) {
@@ -605,12 +604,14 @@ function GameScreen({ config, onHome }) {
     setPhase('playing');
   };
 
-  const endGame = () => {
+  const endGame = async () => {
     if (isSolo) {
       updateSoloStats(categoryId, scores[0], maxPoss);
-      addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId, difficulty, bestStreak);
+      await addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId, difficulty, bestStreak);
     } else {
-      players.forEach((p, i) => addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId, difficulty, 0));
+      await Promise.all(players.map((p, i) =>
+        addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId, difficulty, 0)
+      ));
     }
     setPhase('over');
   };
@@ -976,22 +977,6 @@ function SettingsScreen({ onBack }) {
             </div>
           );
         })}
-        <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
-          <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>Share to Another Device</div>
-          <div style={{ color: T.muted, fontSize: 12, marginBottom: 10 }}>Copy a link — open it on any device and it'll auto-setup with your API key. Don't share with strangers!</div>
-          <Btn color='#8b5cf6' onClick={() => {
-            const key = getApiKey();
-            const url = `${window.location.origin}${window.location.pathname}#key=${encodeURIComponent(key)}`;
-            navigator.clipboard.writeText(url).then(() => {
-              act(() => {}, '✓ Share link copied!');
-            });
-          }}>📋 Copy Share Link</Btn>
-        </div>
-        <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
-          <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>API Key</div>
-          <div style={{ color: T.muted, fontSize: 12, marginBottom: 10 }}>Reset your Anthropic API key</div>
-          <Btn color={T.border2} onClick={() => { clearApiKey(); window.location.reload(); }}>Reset Key</Btn>
-        </div>
       </div>
     </div>
   );
@@ -1001,29 +986,9 @@ function SettingsScreen({ onBack }) {
 // ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [apiKey, setApiKey] = useState(() => {
-    // Check URL hash for a shared key: whatisthat.vercel.app/#key=sk-ant-...
-    const hash = window.location.hash;
-    const match = hash.match(/[#&]?key=(sk-ant-[^&]+)/);
-    if (match) {
-      const k = decodeURIComponent(match[1]);
-      saveApiKey(k);
-      // Clean the key out of the URL immediately
-      window.history.replaceState(null, '', window.location.pathname);
-      return k;
-    }
-    return getApiKey();
-  });
   const [screen, setScreen] = useState('home');
   const [catId, setCatId]   = useState(null);
   const [config, setConfig] = useState(null);
-
-  if (!apiKey) return (
-    <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: T.font, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <SetupScreen onSave={k => setApiKey(k)} />
-      <style>{css}</style>
-    </div>
-  );
 
   return (
     <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: T.font, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 16, position: 'relative', overflow: 'hidden' }}>

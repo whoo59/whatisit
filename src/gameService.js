@@ -1,20 +1,14 @@
 import { getCategoryById } from './categories';
 
 // ── Storage ───────────────────────────────────────────────────────────────────
-const KEY_API         = 'wit_apiKey';
 const KEY_SEEN        = (id) => `wit_seen_${id}`;
 const KEY_SEEN_PLAYER = (playerId, catId) => `wit_seen_${playerId}_${catId}`;
 const KEY_ANSWERS     = (playerId, catId) => `wit_answers_${playerId}_${catId}`;
 const KEY_SOLO        = 'wit_soloStats';
 const KEY_PLAYERS     = 'wit_knownPlayers';
-const KEY_LEADERBOARD = 'wit_leaderboard';
 const KEY_DIFFICULTY  = 'wit_difficulty';
 const KEY_REPORTS     = 'wit_reports';
 const KEY_CROPPED_BAD = 'wit_croppedBad';
-
-export const getApiKey   = () => localStorage.getItem(KEY_API) || '';
-export const saveApiKey  = (k) => localStorage.setItem(KEY_API, k);
-export const clearApiKey = () => localStorage.removeItem(KEY_API);
 
 // ── Player name memory ────────────────────────────────────────────────────────
 export function getKnownPlayers() {
@@ -38,7 +32,6 @@ export function addSeen(catId, names) {
   localStorage.setItem(KEY_SEEN(catId), JSON.stringify(updated));
 }
 export function clearSeen(catId) {
-  // Clear both global key and all per-player keys for this category
   Object.keys(localStorage)
     .filter(k => {
       if (!k.startsWith('wit_seen_')) return false;
@@ -75,22 +68,48 @@ export function countSeenForCategory(catId) {
 }
 
 // ── Per-player answer history (for ghost mode) ────────────────────────────────
-export function getPlayerAnswers(playerId, catId) {
+function getLocalAnswers(playerId, catId) {
   try { return JSON.parse(localStorage.getItem(KEY_ANSWERS(playerId, catId)) || '[]'); }
   catch { return []; }
 }
+function setLocalAnswers(playerId, catId, answers) {
+  localStorage.setItem(KEY_ANSWERS(playerId, catId), JSON.stringify(answers.slice(-500)));
+}
+
+// Save locally + fire-and-forget POST to server
 export function addPlayerAnswer(playerId, catId, item, guess, score) {
   if (!playerId) return;
-  const answers = getPlayerAnswers(playerId, catId);
+  const answers = getLocalAnswers(playerId, catId);
   const key = item.wikiTitle || item.name;
   if (!answers.some(a => (a.wikiTitle || a.name) === key)) {
-    answers.push({ name: item.name, wikiTitle: item.wikiTitle, guess, score, date: Date.now() });
-    localStorage.setItem(KEY_ANSWERS(playerId, catId), JSON.stringify(answers.slice(-500)));
+    answers.push({ name: item.name, wikiTitle: item.wikiTitle || '', guess, score, date: Date.now() });
+    setLocalAnswers(playerId, catId, answers);
   }
+  // Sync to server (fire-and-forget)
+  fetch(`/api/answers?playerId=${encodeURIComponent(playerId)}&catId=${encodeURIComponent(catId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item, guess, score }),
+  }).catch(() => {}); // silently ignore if offline
 }
+
+// Fetch ghost's answers from server, populate local cache so getGhostAnswer() works sync
+export async function fetchGhostAnswers(ghostId, catId) {
+  if (!ghostId) return;
+  try {
+    const res = await fetch(`/api/answers?playerId=${encodeURIComponent(ghostId)}&catId=${encodeURIComponent(catId)}`);
+    if (!res.ok) return;
+    const answers = await res.json();
+    if (Array.isArray(answers) && answers.length > 0) {
+      setLocalAnswers(ghostId, catId, answers);
+    }
+  } catch {}
+}
+
+// Sync lookup from local cache (populated by fetchGhostAnswers at game start)
 export function getGhostAnswer(ghostId, catId, item) {
   if (!ghostId) return null;
-  const answers = getPlayerAnswers(ghostId, catId);
+  const answers = getLocalAnswers(ghostId, catId);
   return answers.find(a => item.wikiTitle && a.wikiTitle && a.wikiTitle === item.wikiTitle)
       || answers.find(a => a.name === item.name)
       || null;
@@ -113,18 +132,32 @@ export function updateSoloStats(catId, score, maxPossible) {
   return stats[catId];
 }
 
-// ── Leaderboard ───────────────────────────────────────────────────────────────
-export function getLeaderboard() {
-  try { return JSON.parse(localStorage.getItem(KEY_LEADERBOARD) || '[]'); }
-  catch { return []; }
+// ── Leaderboard (server-backed, shared across devices) ────────────────────────
+export async function fetchLeaderboard() {
+  try {
+    const res = await fetch('/api/leaderboard');
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
 }
-export function addLeaderboardEntry(player, score, maxPossible, questions, categoryId, difficulty = 'medium', bestStreak = 0) {
-  const board = getLeaderboard();
-  board.push({ player, score, maxPossible, questions, categoryId, difficulty, bestStreak, date: Date.now() });
-  localStorage.setItem(KEY_LEADERBOARD, JSON.stringify(board.slice(-200)));
+
+export async function addLeaderboardEntry(player, score, maxPossible, questions, categoryId, difficulty = 'medium', bestStreak = 0) {
+  const entry = { player, score, maxPossible, questions, categoryId, difficulty, bestStreak, date: Date.now() };
+  try {
+    await fetch('/api/leaderboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    });
+  } catch {} // silently ignore if offline
 }
-export function clearLeaderboard() {
-  localStorage.removeItem(KEY_LEADERBOARD);
+
+export async function clearLeaderboard() {
+  try {
+    await fetch('/api/leaderboard', { method: 'DELETE' });
+  } catch {}
 }
 
 // ── Difficulty ────────────────────────────────────────────────────────────────
@@ -160,7 +193,6 @@ export function addCroppedBadUrl(url) {
 }
 
 // ── Wikipedia thumbnail ───────────────────────────────────────────────────────
-// Exported so GameScreen can fetch a replacement after a bad-photo report
 const BAD_KEYWORDS = ['map', 'range', 'distribution', 'diagram', 'illustration', 'drawing',
   'sketch', 'logo', 'flag', 'coat_of_arms', 'chart', 'graph', 'blank', 'outline',
   'locator', 'location_', 'territory', 'administrative', 'silhouette'];
@@ -172,7 +204,6 @@ function isBadImage(url) {
 
 async function getWikiThumbnail(wikiTitle, excludeUrl = '') {
   try {
-    // Try media-list first to find a real photo
     const mediaRes = await fetch(
       `https://en.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(wikiTitle)}`,
       { headers: { Accept: 'application/json' } }
@@ -197,7 +228,6 @@ async function getWikiThumbnail(wikiTitle, excludeUrl = '') {
       }
     }
 
-    // Fall back to summary thumbnail
     const res = await fetch(
       `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiTitle)}`,
       { headers: { Accept: 'application/json' } }
@@ -229,11 +259,9 @@ async function getINaturalistImage(speciesName) {
     const data = await res.json();
     const taxon = data.results?.[0];
     if (!taxon) return '';
-    // Prefer taxon_photos array, fall back to default_photo
     const photos = taxon.taxon_photos?.map(tp => tp.photo) || [];
     const photo = photos[0] || taxon.default_photo;
     if (!photo?.url) return '';
-    // Replace 'square' size with 'large' for better quality
     return photo.url.replace('/square.', '/large.').replace('square.', 'large.');
   } catch {
     return '';
@@ -247,7 +275,8 @@ const DIFFICULTY_INSTRUCTIONS = {
   hard:   'DIFFICULTY BIAS: Lean toward obscure and challenging items. At least 2 out of every 3 items should be difficulty 2 or 3.',
 };
 
-export async function fetchBatch(apiKey, categoryId, count = 3, playerId = null) {
+// apiKey param removed — all calls go through /api/claude server-side proxy
+export async function fetchBatch(categoryId, count = 3, playerId = null) {
   const cat = getCategoryById(categoryId);
   if (!cat) throw new Error('Unknown category');
 
@@ -270,23 +299,19 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
   "region": "One of: Europe / Asia / North America / South America / Africa / Oceania / Middle East / Ocean",
   "subject": "What players are guessing",
   "difficulty": 1,
-  "exact": ["specific correct answers — only the FULL specific name and direct synonyms, NOT generic terms like 'lake' or 'mountain'"],
+  "exact": ["specific correct answers — ONLY the full specific name and direct synonyms. NEVER include generic geographic or biological terms like 'island', 'lake', 'mountain', 'river', 'peninsula', 'animal', 'fish', 'bird', etc."],
   "close": ["country name", "closely related terms — nearby countries, closely related species or dish type"],
-  "ballpark": ["continent", "broad category — must be genuinely vague/broad, like 'big cat' or 'reef' or 'South American food'"],
+  "ballpark": ["continent", "broad category — must be genuinely vague/broad, like 'big cat' or 'reef' or 'South American food' or 'island'"],
   "imageAlt": "One sentence describing what the photo shows",
   "hints": ["vague hint", "slightly more specific", "more specific", "nearly gives it away"],
   "tags": ["3-5 short descriptor chips, e.g. Mammal | Endangered | East Africa | Felidae family"],
   "funFact": "4-5 rich educational sentences. Cover: (1) precise location and context — country, region, habitat; (2) what KIND of thing this is — for animals: class + family + diet/adaptations, for places: geological/architectural type, for food: main ingredients + cooking method; (3) historical or cultural significance; (4) relationship to similar things — related species, nearby landmarks, similar dishes; (5) one genuinely surprising or little-known fact."
 }`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  // Call our server-side proxy instead of Anthropic directly
+  const res = await fetch('/api/claude', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 3000,
@@ -296,7 +321,7 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error ${res.status}`);
+    throw new Error(err.error?.message || err.error || `API error ${res.status}`);
   }
 
   const data = await res.json();
@@ -305,10 +330,8 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
 
   const items = JSON.parse(raw);
 
-  // Categories that use iNaturalist as fallback image source
   const INAT_CATEGORIES = ['animals'];
 
-  // Fetch thumbnails — Wikimedia primary, iNaturalist fallback for creature categories
   const withImages = await Promise.all(
     items.map(async item => {
       let image = await getWikiThumbnail(item.wikiTitle || item.name);
@@ -325,24 +348,43 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
+// Generic geographic/biological words that should NEVER score full points alone.
+// These are "ballpark" words at best, not exact answers.
+const GENERIC_TERMS = new Set([
+  'island', 'islands', 'lake', 'river', 'mountain', 'mountains', 'volcano',
+  'ocean', 'sea', 'bay', 'gulf', 'peninsula', 'plateau', 'desert', 'forest',
+  'waterfall', 'canyon', 'valley', 'beach', 'reef', 'cave', 'glacier',
+  'animal', 'fish', 'bird', 'mammal', 'reptile', 'insect', 'plant', 'tree',
+  'flower', 'snake', 'cat', 'dog', 'bear', 'deer', 'monkey', 'frog',
+  'food', 'dish', 'bread', 'meat', 'soup', 'rice', 'noodle', 'curry',
+  'castle', 'church', 'temple', 'bridge', 'tower', 'palace', 'fort',
+  'city', 'town', 'village', 'country', 'continent',
+]);
+
+function isGeneric(word) {
+  return GENERIC_TERMS.has(word.toLowerCase().trim());
+}
+
 export function scoreGuess(guess, item) {
   const g = guess.toLowerCase().trim();
   if (!g) return 0;
 
-  // Match helper: guess fully contains the answer term (always OK),
-  // OR the answer contains the guess — but only if the guess is substantial
-  // (≥5 chars) to prevent "lake" matching "Lake Bled", "ocean" matching "Ocean".
+  // A guess word is "too generic" if it's a single generic term — block it from exact matches
+  const gWords = g.split(/\s+/);
+  const guessIsGeneric = gWords.length === 1 && isGeneric(gWords[0]);
+
+  // Match helper: guess fully contains the answer term (always OK if not generic),
+  // OR the answer contains the guess — only if guess is ≥5 chars AND not a generic term.
   const check = (arr) => (arr || []).some(a => {
     const al = a.toLowerCase();
-    if (g.includes(al)) return true;                    // guess contains full answer term ✓
-    if (al.includes(g) && g.length >= 5) return true;   // answer contains guess, but guess must be 5+ chars
+    if (g.includes(al)) return true;                                        // guess contains the full answer term
+    if (al.includes(g) && g.length >= 5 && !guessIsGeneric) return true;   // answer contains the guess (but must be specific)
     return false;
   });
 
-  // Country/subject: require guess to literally contain the full country/subject word
   const countryMatch = item.country && g.includes(item.country.toLowerCase());
   const subjectMatch = item.subject && g.includes(item.subject.toLowerCase())
-    && guess.trim().length >= 5; // avoid "sea" matching "sea lion"
+    && guess.trim().length >= 5 && !guessIsGeneric;
 
   // 3 pts — nailed it
   if (check(item.exact) || countryMatch || subjectMatch) return 3;
@@ -350,7 +392,7 @@ export function scoreGuess(guess, item) {
   // 2 pts — close
   if (check(item.close)) return 2;
 
-  // 1 pt — ballpark
+  // 1 pt — ballpark (generic terms like "island", "lake" can score here)
   if (check(item.ballpark)) return 1;
 
   const regionMap = {
