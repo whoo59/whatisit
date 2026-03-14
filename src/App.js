@@ -977,6 +977,17 @@ function SettingsScreen({ onBack }) {
           );
         })}
         <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
+          <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>Share to Another Device</div>
+          <div style={{ color: T.muted, fontSize: 12, marginBottom: 10 }}>Copy a link — open it on any device and it'll auto-setup with your API key. Don't share with strangers!</div>
+          <Btn color='#8b5cf6' onClick={() => {
+            const key = getApiKey();
+            const url = `${window.location.origin}${window.location.pathname}#key=${encodeURIComponent(key)}`;
+            navigator.clipboard.writeText(url).then(() => {
+              act(() => {}, '✓ Share link copied!');
+            });
+          }}>📋 Copy Share Link</Btn>
+        </div>
+        <div style={{ padding: '14px', border: `1px solid ${T.border}`, borderRadius: 4 }}>
           <div style={{ color: T.text, fontSize: 14, marginBottom: 3 }}>API Key</div>
           <div style={{ color: T.muted, fontSize: 12, marginBottom: 10 }}>Reset your Anthropic API key</div>
           <Btn color={T.border2} onClick={() => { clearApiKey(); window.location.reload(); }}>Reset Key</Btn>
@@ -990,7 +1001,19 @@ function SettingsScreen({ onBack }) {
 // ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [apiKey, setApiKey] = useState(() => getApiKey());
+  const [apiKey, setApiKey] = useState(() => {
+    // Check URL hash for a shared key: whatisthat.vercel.app/#key=sk-ant-...
+    const hash = window.location.hash;
+    const match = hash.match(/[#&]?key=(sk-ant-[^&]+)/);
+    if (match) {
+      const k = decodeURIComponent(match[1]);
+      saveApiKey(k);
+      // Clean the key out of the URL immediately
+      window.history.replaceState(null, '', window.location.pathname);
+      return k;
+    }
+    return getApiKey();
+  });
   const [screen, setScreen] = useState('home');
   const [catId, setCatId]   = useState(null);
   const [config, setConfig] = useState(null);
