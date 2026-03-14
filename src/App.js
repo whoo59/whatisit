@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { CATEGORIES, getCategoryById } from './categories';
 import {
   getApiKey, saveApiKey, clearApiKey,
-  getSeen, clearSeen, clearAllSeen,
+  getSeen, clearSeen, clearAllSeen, countSeenForCategory,
   getSoloStats, updateSoloStats,
   getKnownPlayers, savePlayerName,
   fetchBatch, scoreGuess, maxPoints,
@@ -10,6 +10,7 @@ import {
   getDifficulty, setDifficulty,
   addReport,
   fetchFreshImage, getCroppedBadUrls, addCroppedBadUrl,
+  addPlayerAnswer, getGhostAnswer,
 } from './gameService';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -171,13 +172,14 @@ function LeaderboardTicker({ onLeaderboard }) {
         <span style={{ fontSize: idx < 3 ? 15 : 11, flexShrink: 0 }}>{idx < 3 ? medals[idx] : `#${idx + 1}`}</span>
         <span style={{ fontSize: 14, color: T.text, fontFamily: T.font, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.player}</span>
         <span style={{ fontSize: 18, fontWeight: 300, color: '#f59e0b', fontFamily: T.font, flexShrink: 0 }}>{e.score}</span>
+        <span style={{ fontSize: 14, color: pct >= 80 ? '#4ade80' : pct >= 50 ? '#f59e0b' : T.muted, fontWeight: 600, flexShrink: 0 }}>{pct}%</span>
+        {e.bestStreak > 1 && <span style={{ fontSize: 10, color: '#f97316', flexShrink: 0 }}>🔥{e.bestStreak}</span>}
         <span style={{ fontSize: 11, color: T.muted, flexShrink: 0 }}>{cat?.emoji} {cat?.name}</span>
         {e.difficulty && e.difficulty !== 'medium' && (
           <span style={{ fontSize: 10, color: e.difficulty === 'hard' ? '#ef4444' : '#10b981', flexShrink: 0 }}>
             {e.difficulty === 'hard' ? '💀' : '😊'}
           </span>
         )}
-        <span style={{ fontSize: 10, color: T.dim, marginLeft: 'auto', flexShrink: 0 }}>{pct}%</span>
       </div>
       <div style={{ fontSize: 10, color: T.dim, letterSpacing: 1, flexShrink: 0 }}>See All →</div>
     </div>
@@ -268,24 +270,27 @@ function LeaderboardScreen({ onBack }) {
             const cat = getCategoryById(e.categoryId);
             const pct = e.maxPossible > 0 ? Math.round(e.score / e.maxPossible * 100) : 0;
             return (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', border: `1px solid ${T.border}`, borderRadius: 4, background: i === 0 ? '#f59e0b08' : T.bg2 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', border: `1px solid ${i === 0 ? '#f59e0b30' : T.border}`, borderRadius: 4, background: i === 0 ? '#f59e0b08' : T.bg2 }}>
                 <div style={{ fontSize: i < 3 ? 20 : 14, minWidth: 28, textAlign: 'center', color: T.dim }}>
                   {i < 3 ? medals[i] : `#${i + 1}`}
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, color: T.text, fontFamily: T.font }}>{e.player}</div>
-                  <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
-                    {cat?.emoji} {cat?.name} · {e.questions} questions
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: 2, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span>{cat?.emoji} {cat?.name}</span>
+                    <span style={{ color: T.border2 }}>·</span>
+                    <span>{e.questions}Q</span>
+                    {e.bestStreak > 1 && <span style={{ color: '#f97316' }}>🔥 {e.bestStreak} streak</span>}
                     {e.difficulty && e.difficulty !== 'medium' && (
-                      <span style={{ marginLeft: 6, color: e.difficulty === 'hard' ? '#ef4444' : '#10b981' }}>
-                        · {e.difficulty === 'hard' ? '💀 Hard' : '😊 Easy'}
+                      <span style={{ color: e.difficulty === 'hard' ? '#ef4444' : '#10b981' }}>
+                        {e.difficulty === 'hard' ? '💀' : '😊'}
                       </span>
                     )}
                   </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 22, fontWeight: 300, fontFamily: T.font, color: T.text }}>{e.score}</div>
-                  <div style={{ fontSize: 10, color: T.dim, letterSpacing: 1 }}>{pct}% acc</div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: 22, fontWeight: 300, fontFamily: T.font, color: T.text, lineHeight: 1 }}>{e.score}</div>
+                  <div style={{ fontSize: 16, color: pct >= 80 ? '#4ade80' : pct >= 50 ? '#f59e0b' : T.dim, fontWeight: 600, lineHeight: 1.2 }}>{pct}%</div>
                 </div>
               </div>
             );
@@ -320,6 +325,7 @@ function ModeScreen({ categoryId, onStart, onBack }) {
   const [mode, setMode] = useState(null);
   const [playerCount, setPlayerCount] = useState(2);
   const [names, setNames] = useState(['', '', '', '']);
+  const [ghostName, setGhostName] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(null);
   const [localDiff, setLocalDiff] = useState(() => getDifficulty());
   const known = getKnownPlayers();
@@ -330,7 +336,7 @@ function ModeScreen({ categoryId, onStart, onBack }) {
       .map((n, i) => n.trim() || defaults[i]);
     finalNames.forEach(savePlayerName);
     setDifficulty(localDiff);
-    onStart({ mode, players: finalNames, categoryId, difficulty: localDiff });
+    onStart({ mode, players: finalNames, categoryId, difficulty: localDiff, ghostPlayer: mode === 'solo' ? ghostName : '' });
   };
 
   if (!mode) return (
@@ -395,6 +401,30 @@ function ModeScreen({ categoryId, onStart, onBack }) {
           </div>
         ))}
       </div>
+      {/* Ghost picker — solo only, only shown if other players exist */}
+      {mode === 'solo' && (() => {
+        const myName = names[0].trim() || defaults[0];
+        const others = known.filter(k => k !== myName);
+        if (others.length === 0) return null;
+        return (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.muted, marginBottom: 8, textAlign: 'center' }}>Challenge a Ghost?</div>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <div onClick={() => setGhostName('')}
+                style={{ padding: '8px 14px', border: `1px solid ${!ghostName ? cat.color : T.border}`, borderRadius: 3, cursor: 'pointer', background: !ghostName ? `${cat.color}18` : 'transparent', fontSize: 12, color: !ghostName ? cat.color : T.muted, transition: 'all .15s' }}>
+                Solo Only
+              </div>
+              {others.map(k => (
+                <div key={k} onClick={() => setGhostName(ghostName === k ? '' : k)}
+                  style={{ padding: '8px 14px', border: `1px solid ${ghostName === k ? '#8b5cf6' : T.border}`, borderRadius: 3, cursor: 'pointer', background: ghostName === k ? '#8b5cf618' : 'transparent', fontSize: 12, color: ghostName === k ? '#8b5cf6' : T.muted, transition: 'all .15s' }}>
+                  👻 {k}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Difficulty picker */}
       <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.muted, marginBottom: 10, textAlign: 'center' }}>Difficulty</div>
@@ -422,7 +452,7 @@ const CHECKPOINT = 10;
 const DIFF_MULT = { easy: 1, medium: 1.5, hard: 2 };
 
 function GameScreen({ config, onHome }) {
-  const { mode, players, categoryId, difficulty = 'medium' } = config;
+  const { mode, players, categoryId, difficulty = 'medium', ghostPlayer = '' } = config;
   const cat = getCategoryById(categoryId);
   const isSolo = mode === 'solo';
   const mult = DIFF_MULT[difficulty] || 1;
@@ -447,8 +477,10 @@ function GameScreen({ config, onHome }) {
   const [maxPoss, setMaxPoss]   = useState(0);
   const [reporting, setReporting] = useState(false);
   const [croppedUrls, setCroppedUrls] = useState(() => getCroppedBadUrls());
+  const [ghostComparison, setGhostComparison] = useState([]);
 
   const bgFetchRef = useRef(false);
+  const playerNameRef = useRef(players[0]);
 
   const handleReport = async (reason, note) => {
     const currentItem = queue[localIdx];
@@ -472,7 +504,7 @@ function GameScreen({ config, onHome }) {
     bgFetchRef.current = true;
     setFetching(true);
     try {
-      const items = await fetchBatch(getApiKey(), categoryId, BATCH_SIZE);
+      const items = await fetchBatch(getApiKey(), categoryId, BATCH_SIZE, isSolo ? playerNameRef.current : null);
       setQueue(q => [...q, ...items]);
       if (initial) setPhase('playing');
     } catch(e) {
@@ -482,7 +514,7 @@ function GameScreen({ config, onHome }) {
       setFetching(false);
       bgFetchRef.current = false;
     }
-  }, [categoryId]);
+  }, [categoryId, isSolo]);
 
   useEffect(() => { loadBatch(true); }, [loadBatch]);
 
@@ -532,6 +564,19 @@ function GameScreen({ config, onHome }) {
       const ns = got ? streak + 1 : 0;
       setStreak(ns);
       setBest(b => Math.max(b, ns));
+      // Save this answer to player history
+      addPlayerAnswer(players[0], categoryId, item, guesses[0], rawPts[0]);
+      // Check for ghost overlap
+      if (ghostPlayer) {
+        const ghostAns = getGhostAnswer(ghostPlayer, categoryId, item);
+        if (ghostAns) {
+          setGhostComparison(gc => [...gc, {
+            itemName: item.name,
+            myGuess: guesses[0], myScore: rawPts[0],
+            ghostGuess: ghostAns.guess, ghostScore: ghostAns.score,
+          }]);
+        }
+      }
     }
     setPhase('revealed');
   };
@@ -563,9 +608,9 @@ function GameScreen({ config, onHome }) {
   const endGame = () => {
     if (isSolo) {
       updateSoloStats(categoryId, scores[0], maxPoss);
-      addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId, difficulty);
+      addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId, difficulty, bestStreak);
     } else {
-      players.forEach((p, i) => addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId, difficulty));
+      players.forEach((p, i) => addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId, difficulty, 0));
     }
     setPhase('over');
   };
@@ -623,28 +668,75 @@ function GameScreen({ config, onHome }) {
     </div>
   );
 
-  if (phase === 'over') return (
-    <div style={{ textAlign: 'center', maxWidth: 500, margin: '0 auto' }}>
-      <div style={lbl}>Game Over · {qIdx} Questions</div>
-      <h2 style={{ fontSize: 'clamp(26px,5vw,48px)', fontWeight: 400, letterSpacing: -1, margin: '8px 0 6px', fontFamily: T.font }}>
-        {isSolo ? 'Nice work!' : tied ? "It's a Tie! 🤝" : `${players[winIdx]} Wins!`}
-      </h2>
-      {isSolo && bestStreak > 1 && <div style={{ color: '#f97316', fontSize: 13, letterSpacing: 3, marginBottom: 6 }}>BEST STREAK: {bestStreak} 🔥</div>}
-      <div style={{ display: 'flex', gap: 12, justifyContent: 'center', margin: '22px 0 28px', flexWrap: 'wrap' }}>
-        {players.map((p, i) => (
-          <div key={i} style={{ padding: '18px 30px', border: `2px solid ${PC[i % 4]}`, borderRadius: 4, background: `${PC[i % 4]}0c`, minWidth: 110 }}>
-            <div style={{ color: PC[i % 4], fontSize: 10, letterSpacing: 3, textTransform: 'uppercase' }}>{p}</div>
-            <div style={{ fontSize: 46, fontWeight: 300, lineHeight: 1.1, margin: '4px 0 2px', fontFamily: T.font }}>{scores[i]}</div>
-            <div style={{ color: T.dim, fontSize: 11 }}>pts</div>
-          </div>
-        ))}
+  if (phase === 'over') {
+    const myPct = maxPoss > 0 ? Math.round(scores[0] / maxPoss * 100) : 0;
+    return (
+      <div style={{ textAlign: 'center', maxWidth: 500, margin: '0 auto' }}>
+        <div style={lbl}>Game Over · {qIdx} Questions</div>
+        <h2 style={{ fontSize: 'clamp(26px,5vw,48px)', fontWeight: 400, letterSpacing: -1, margin: '8px 0 6px', fontFamily: T.font }}>
+          {isSolo ? 'Nice work!' : tied ? "It's a Tie! 🤝" : `${players[winIdx]} Wins!`}
+        </h2>
+        {isSolo && bestStreak > 1 && <div style={{ color: '#f97316', fontSize: 13, letterSpacing: 3, marginBottom: 6 }}>BEST STREAK: {bestStreak} 🔥</div>}
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', margin: '22px 0', flexWrap: 'wrap' }}>
+          {players.map((p, i) => {
+            const pct = maxPoss > 0 ? Math.round(scores[i] / maxPoss * 100) : 0;
+            return (
+              <div key={i} style={{ padding: '18px 30px', border: `2px solid ${PC[i % 4]}`, borderRadius: 4, background: `${PC[i % 4]}0c`, minWidth: 110 }}>
+                <div style={{ color: PC[i % 4], fontSize: 10, letterSpacing: 3, textTransform: 'uppercase' }}>{p}</div>
+                <div style={{ fontSize: 46, fontWeight: 300, lineHeight: 1.1, margin: '4px 0 0', fontFamily: T.font }}>{scores[i]}</div>
+                <div style={{ fontSize: 22, color: pct >= 80 ? '#4ade80' : pct >= 50 ? '#f59e0b' : T.muted, fontWeight: 600, lineHeight: 1.1 }}>{pct}%</div>
+                {isSolo && bestStreak > 1 && <div style={{ color: '#f97316', fontSize: 11, marginTop: 2 }}>🔥 {bestStreak} streak</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Ghost comparison */}
+        {ghostPlayer && ghostComparison.length > 0 && (() => {
+          const myTotal = ghostComparison.reduce((s, g) => s + g.myScore, 0);
+          const ghostTotal = ghostComparison.reduce((s, g) => s + g.ghostScore, 0);
+          const n = ghostComparison.length;
+          const iWon = myTotal > ghostTotal;
+          const tied2 = myTotal === ghostTotal;
+          return (
+            <div style={{ margin: '0 0 20px', padding: '14px 16px', border: `1px solid #8b5cf640`, borderRadius: 4, background: '#8b5cf607', textAlign: 'left' }}>
+              <div style={{ color: '#8b5cf6', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
+                👻 VS {ghostPlayer} — {n} Shared {n === 1 ? 'Question' : 'Questions'}
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
+                <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', border: `1px solid ${PC[0]}40`, borderRadius: 3, background: `${PC[0]}07` }}>
+                  <div style={{ color: PC[0], fontSize: 9, letterSpacing: 3, marginBottom: 2 }}>YOU</div>
+                  <div style={{ fontSize: 28, fontFamily: T.font, color: T.text, lineHeight: 1 }}>{myTotal}</div>
+                </div>
+                <div style={{ color: T.dim, fontSize: 12 }}>VS</div>
+                <div style={{ flex: 1, textAlign: 'center', padding: '10px 6px', border: `1px solid #8b5cf640`, borderRadius: 3, background: '#8b5cf607' }}>
+                  <div style={{ color: '#8b5cf6', fontSize: 9, letterSpacing: 3, marginBottom: 2 }}>👻 {ghostPlayer.toUpperCase()}</div>
+                  <div style={{ fontSize: 28, fontFamily: T.font, color: T.text, lineHeight: 1 }}>{ghostTotal}</div>
+                </div>
+              </div>
+              <div style={{ textAlign: 'center', color: iWon ? '#4ade80' : tied2 ? T.muted : '#ef4444', fontSize: 14, marginBottom: 10 }}>
+                {iWon ? `🏆 You beat ${ghostPlayer}!` : tied2 ? '🤝 Dead even!' : `👻 ${ghostPlayer} got you this time...`}
+              </div>
+              {ghostComparison.map((g, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, padding: '6px 0', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
+                  <div style={{ flex: 1, color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.itemName}</div>
+                  <div style={{ color: g.myScore > g.ghostScore ? '#4ade80' : g.myScore === g.ghostScore ? T.muted : '#ef4444', fontSize: 11, flexShrink: 0 }}>
+                    You {g.myScore}/3
+                  </div>
+                  <div style={{ color: '#8b5cf6', fontSize: 11, flexShrink: 0 }}>Ghost {g.ghostScore}/3</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Btn fill color={cat.color} onClick={() => window.location.reload()}>Play Again {cat.emoji}</Btn>
+          <Btn color={T.border2} onClick={onHome}>Home</Btn>
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-        <Btn fill color={cat.color} onClick={() => window.location.reload()}>Play Again {cat.emoji}</Btn>
-        <Btn color={T.border2} onClick={onHome}>Home</Btn>
-      </div>
-    </div>
-  );
+    );
+  }
 
   const mp = maxPoints();
 
@@ -787,7 +879,7 @@ function GameScreen({ config, onHome }) {
       {/* Revealed */}
       {phase === 'revealed' && rpts && (
         <>
-          <div style={{ display: 'flex', gap: 9, marginBottom: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 9, marginBottom: 10, flexWrap: 'wrap' }}>
             {players.map((player, pi) => {
               const l = ptLabel(rpts[pi]);
               const pc = PC[pi % 4];
@@ -801,8 +893,34 @@ function GameScreen({ config, onHome }) {
               );
             })}
           </div>
+
+          {/* Ghost answer — shown when playing against a ghost */}
+          {ghostPlayer && (() => {
+            const ghostAns = getGhostAnswer(ghostPlayer, categoryId, item);
+            if (!ghostAns) return <div style={{ padding: '9px 13px', border: `1px solid #8b5cf618`, borderRadius: 3, background: '#8b5cf607', marginBottom: 9, color: '#8b5cf660', fontSize: 12, fontStyle: 'italic' }}>👻 {ghostPlayer} hasn't seen this one yet</div>;
+            const gl = ptLabel(ghostAns.score);
+            return (
+              <div style={{ padding: '11px 13px', border: `1px solid #8b5cf640`, borderRadius: 3, background: '#8b5cf607', marginBottom: 10 }}>
+                <div style={{ color: '#8b5cf6', fontSize: 10, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 4 }}>👻 {ghostPlayer}'s Answer</div>
+                <div style={{ fontStyle: 'italic', color: T.muted, fontSize: 13, marginBottom: 4 }}>"{ghostAns.guess || '(no guess)'}"</div>
+                <div style={{ color: gl.c, fontSize: 13 }}>{gl.t}</div>
+              </div>
+            );
+          })()}
+
+          {/* Tags */}
+          {item?.tags && item.tags.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+              {item.tags.map((tag, i) => (
+                <span key={i} style={{ padding: '3px 10px', background: `${cat.color}18`, border: `1px solid ${cat.color}40`, borderRadius: 20, fontSize: 11, color: cat.color, letterSpacing: 1 }}>
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* Fun fact — always shown */}
-          <div style={{ padding: '13px 15px', background: T.bg2, borderLeft: `2px solid ${cat.color}`, marginBottom: 12, fontStyle: 'italic', color: '#b8b2a6', lineHeight: 1.65, fontSize: 14 }}>
+          <div style={{ padding: '13px 15px', background: T.bg2, borderLeft: `2px solid ${cat.color}`, marginBottom: 12, color: '#b8b2a6', lineHeight: 1.75, fontSize: 14 }}>
             ✦ {item?.funFact}
           </div>
           <div style={{ textAlign: 'center' }}>
@@ -850,10 +968,10 @@ function SettingsScreen({ onBack }) {
           <Btn color='#ef4444' onClick={() => act(clearAllSeen, '✓ All history cleared!')}>Clear All</Btn>
         </div>
         {CATEGORIES.map(cat => {
-          const n = getSeen(cat.id).length;
+          const n = countSeenForCategory(cat.id);
           return (
             <div key={cat.id} style={{ padding: '10px 14px', border: `1px solid ${T.border}`, borderRadius: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13 }}>{cat.emoji} {cat.name} <span style={{ color: T.dim }}>({n})</span></span>
+              <span style={{ fontSize: 13 }}>{cat.emoji} {cat.name} <span style={{ color: T.dim }}>({n} seen)</span></span>
               {n > 0 && <button onClick={() => act(() => clearSeen(cat.id), `✓ ${cat.name} cleared!`)} style={{ background: 'none', border: 'none', color: T.dim, cursor: 'pointer', fontSize: 11, textDecoration: 'underline' }}>clear</button>}
             </div>
           );

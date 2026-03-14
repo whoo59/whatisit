@@ -3,6 +3,8 @@ import { getCategoryById } from './categories';
 // ── Storage ───────────────────────────────────────────────────────────────────
 const KEY_API         = 'wit_apiKey';
 const KEY_SEEN        = (id) => `wit_seen_${id}`;
+const KEY_SEEN_PLAYER = (playerId, catId) => `wit_seen_${playerId}_${catId}`;
+const KEY_ANSWERS     = (playerId, catId) => `wit_answers_${playerId}_${catId}`;
 const KEY_SOLO        = 'wit_soloStats';
 const KEY_PLAYERS     = 'wit_knownPlayers';
 const KEY_LEADERBOARD = 'wit_leaderboard';
@@ -35,9 +37,63 @@ export function addSeen(catId, names) {
   const updated = [...new Set([...getSeen(catId), ...names])].slice(-300);
   localStorage.setItem(KEY_SEEN(catId), JSON.stringify(updated));
 }
-export function clearSeen(catId) { localStorage.removeItem(KEY_SEEN(catId)); }
+export function clearSeen(catId) {
+  // Clear both global key and all per-player keys for this category
+  Object.keys(localStorage)
+    .filter(k => {
+      if (!k.startsWith('wit_seen_')) return false;
+      const rest = k.slice('wit_seen_'.length);
+      return rest === catId || rest.endsWith(`_${catId}`);
+    })
+    .forEach(k => localStorage.removeItem(k));
+}
 export function clearAllSeen() {
   Object.keys(localStorage).filter(k => k.startsWith('wit_seen_')).forEach(k => localStorage.removeItem(k));
+}
+
+// ── Per-player seen tracking ───────────────────────────────────────────────────
+export function getPlayerSeen(playerId, catId) {
+  try { return JSON.parse(localStorage.getItem(KEY_SEEN_PLAYER(playerId, catId)) || '[]'); }
+  catch { return []; }
+}
+export function addPlayerSeen(playerId, catId, names) {
+  const updated = [...new Set([...getPlayerSeen(playerId, catId), ...names])].slice(-300);
+  localStorage.setItem(KEY_SEEN_PLAYER(playerId, catId), JSON.stringify(updated));
+}
+export function countSeenForCategory(catId) {
+  const allItems = new Set();
+  Object.keys(localStorage)
+    .filter(k => k.startsWith('wit_seen_'))
+    .forEach(k => {
+      const rest = k.slice('wit_seen_'.length);
+      if (rest === catId || rest.endsWith(`_${catId}`)) {
+        try { JSON.parse(localStorage.getItem(k) || '[]').forEach(n => allItems.add(n)); }
+        catch {}
+      }
+    });
+  return allItems.size;
+}
+
+// ── Per-player answer history (for ghost mode) ────────────────────────────────
+export function getPlayerAnswers(playerId, catId) {
+  try { return JSON.parse(localStorage.getItem(KEY_ANSWERS(playerId, catId)) || '[]'); }
+  catch { return []; }
+}
+export function addPlayerAnswer(playerId, catId, item, guess, score) {
+  if (!playerId) return;
+  const answers = getPlayerAnswers(playerId, catId);
+  const key = item.wikiTitle || item.name;
+  if (!answers.some(a => (a.wikiTitle || a.name) === key)) {
+    answers.push({ name: item.name, wikiTitle: item.wikiTitle, guess, score, date: Date.now() });
+    localStorage.setItem(KEY_ANSWERS(playerId, catId), JSON.stringify(answers.slice(-500)));
+  }
+}
+export function getGhostAnswer(ghostId, catId, item) {
+  if (!ghostId) return null;
+  const answers = getPlayerAnswers(ghostId, catId);
+  return answers.find(a => item.wikiTitle && a.wikiTitle && a.wikiTitle === item.wikiTitle)
+      || answers.find(a => a.name === item.name)
+      || null;
 }
 
 // ── Solo stats ────────────────────────────────────────────────────────────────
@@ -62,9 +118,9 @@ export function getLeaderboard() {
   try { return JSON.parse(localStorage.getItem(KEY_LEADERBOARD) || '[]'); }
   catch { return []; }
 }
-export function addLeaderboardEntry(player, score, maxPossible, questions, categoryId, difficulty = 'medium') {
+export function addLeaderboardEntry(player, score, maxPossible, questions, categoryId, difficulty = 'medium', bestStreak = 0) {
   const board = getLeaderboard();
-  board.push({ player, score, maxPossible, questions, categoryId, difficulty, date: Date.now() });
+  board.push({ player, score, maxPossible, questions, categoryId, difficulty, bestStreak, date: Date.now() });
   localStorage.setItem(KEY_LEADERBOARD, JSON.stringify(board.slice(-200)));
 }
 export function clearLeaderboard() {
@@ -191,11 +247,11 @@ const DIFFICULTY_INSTRUCTIONS = {
   hard:   'DIFFICULTY BIAS: Lean toward obscure and challenging items. At least 2 out of every 3 items should be difficulty 2 or 3.',
 };
 
-export async function fetchBatch(apiKey, categoryId, count = 3) {
+export async function fetchBatch(apiKey, categoryId, count = 3, playerId = null) {
   const cat = getCategoryById(categoryId);
   if (!cat) throw new Error('Unknown category');
 
-  const seen = getSeen(categoryId);
+  const seen = playerId ? getPlayerSeen(playerId, categoryId) : getSeen(categoryId);
   const reported = getReportedNames();
   const blocklist = [...new Set([...seen.slice(-80), ...reported])];
   const seenNote = blocklist.length > 0
@@ -214,12 +270,13 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
   "region": "One of: Europe / Asia / North America / South America / Africa / Oceania / Middle East / Ocean",
   "subject": "What players are guessing",
   "difficulty": 1,
-  "exact": ["specific correct answers", "exact name", "common alternate names"],
-  "close": ["country name", "closely related terms", "near-correct answers"],
-  "ballpark": ["continent", "broad category", "vague but related terms"],
+  "exact": ["specific correct answers — only the FULL specific name and direct synonyms, NOT generic terms like 'lake' or 'mountain'"],
+  "close": ["country name", "closely related terms — nearby countries, closely related species or dish type"],
+  "ballpark": ["continent", "broad category — must be genuinely vague/broad, like 'big cat' or 'reef' or 'South American food'"],
   "imageAlt": "One sentence describing what the photo shows",
   "hints": ["vague hint", "slightly more specific", "more specific", "nearly gives it away"],
-  "funFact": "2-3 sentence genuinely surprising fact."
+  "tags": ["3-5 short descriptor chips, e.g. Mammal | Endangered | East Africa | Felidae family"],
+  "funFact": "4-5 rich educational sentences. Cover: (1) precise location and context — country, region, habitat; (2) what KIND of thing this is — for animals: class + family + diet/adaptations, for places: geological/architectural type, for food: main ingredients + cooking method; (3) historical or cultural significance; (4) relationship to similar things — related species, nearby landmarks, similar dishes; (5) one genuinely surprising or little-known fact."
 }`;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -262,7 +319,8 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, no code fence
     })
   );
 
-  addSeen(categoryId, withImages.map(i => i.name));
+  if (playerId) addPlayerSeen(playerId, categoryId, withImages.map(i => i.name));
+  else addSeen(categoryId, withImages.map(i => i.name));
   return withImages;
 }
 
@@ -271,15 +329,23 @@ export function scoreGuess(guess, item) {
   const g = guess.toLowerCase().trim();
   if (!g) return 0;
 
+  // Match helper: guess fully contains the answer term (always OK),
+  // OR the answer contains the guess — but only if the guess is substantial
+  // (≥5 chars) to prevent "lake" matching "Lake Bled", "ocean" matching "Ocean".
   const check = (arr) => (arr || []).some(a => {
     const al = a.toLowerCase();
-    return g.includes(al) || al.includes(g);
+    if (g.includes(al)) return true;                    // guess contains full answer term ✓
+    if (al.includes(g) && g.length >= 5) return true;   // answer contains guess, but guess must be 5+ chars
+    return false;
   });
 
+  // Country/subject: require guess to literally contain the full country/subject word
+  const countryMatch = item.country && g.includes(item.country.toLowerCase());
+  const subjectMatch = item.subject && g.includes(item.subject.toLowerCase())
+    && guess.trim().length >= 5; // avoid "sea" matching "sea lion"
+
   // 3 pts — nailed it
-  if (check(item.exact)
-    || (item.country && g.includes(item.country.toLowerCase()))
-    || (item.subject && g.includes(item.subject.toLowerCase()))) return 3;
+  if (check(item.exact) || countryMatch || subjectMatch) return 3;
 
   // 2 pts — close
   if (check(item.close)) return 2;
