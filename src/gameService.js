@@ -8,6 +8,7 @@ const KEY_PLAYERS     = 'wit_knownPlayers';
 const KEY_LEADERBOARD = 'wit_leaderboard';
 const KEY_DIFFICULTY  = 'wit_difficulty';
 const KEY_REPORTS     = 'wit_reports';
+const KEY_CROPPED_BAD = 'wit_croppedBad';
 
 export const getApiKey   = () => localStorage.getItem(KEY_API) || '';
 export const saveApiKey  = (k) => localStorage.setItem(KEY_API, k);
@@ -61,9 +62,9 @@ export function getLeaderboard() {
   try { return JSON.parse(localStorage.getItem(KEY_LEADERBOARD) || '[]'); }
   catch { return []; }
 }
-export function addLeaderboardEntry(player, score, maxPossible, questions, categoryId) {
+export function addLeaderboardEntry(player, score, maxPossible, questions, categoryId, difficulty = 'medium') {
   const board = getLeaderboard();
-  board.push({ player, score, maxPossible, questions, categoryId, date: Date.now() });
+  board.push({ player, score, maxPossible, questions, categoryId, difficulty, date: Date.now() });
   localStorage.setItem(KEY_LEADERBOARD, JSON.stringify(board.slice(-200)));
 }
 export function clearLeaderboard() {
@@ -88,7 +89,22 @@ export function getReportedNames() {
   return getReports().map(r => r.name);
 }
 
+// ── Badly cropped images (never cleared) ──────────────────────────────────────
+export function getCroppedBadUrls() {
+  try { return JSON.parse(localStorage.getItem(KEY_CROPPED_BAD) || '[]'); }
+  catch { return []; }
+}
+export function addCroppedBadUrl(url) {
+  if (!url) return;
+  const list = getCroppedBadUrls();
+  if (!list.includes(url)) {
+    list.push(url);
+    localStorage.setItem(KEY_CROPPED_BAD, JSON.stringify(list.slice(-500)));
+  }
+}
+
 // ── Wikipedia thumbnail ───────────────────────────────────────────────────────
+// Exported so GameScreen can fetch a replacement after a bad-photo report
 const BAD_KEYWORDS = ['map', 'range', 'distribution', 'diagram', 'illustration', 'drawing',
   'sketch', 'logo', 'flag', 'coat_of_arms', 'chart', 'graph', 'blank', 'outline',
   'locator', 'location_', 'territory', 'administrative', 'silhouette'];
@@ -98,7 +114,7 @@ function isBadImage(url) {
   return BAD_KEYWORDS.some(k => u.includes(k));
 }
 
-async function getWikiThumbnail(wikiTitle) {
+async function getWikiThumbnail(wikiTitle, excludeUrl = '') {
   try {
     // Try media-list first to find a real photo
     const mediaRes = await fetch(
@@ -118,7 +134,9 @@ async function getWikiThumbnail(wikiTitle) {
         const best = srcset[srcset.length - 1]?.src || srcset[0]?.src;
         if (best && !isBadImage(best)) {
           const url = best.startsWith('//') ? 'https:' + best : best;
-          return `https://images.weserv.nl/?url=${url.replace('https://', '')}&w=800`;
+          const final = `https://images.weserv.nl/?url=${url.replace('https://', '')}&w=800`;
+          if (excludeUrl && final === excludeUrl) continue;
+          return final;
         }
       }
     }
@@ -132,10 +150,16 @@ async function getWikiThumbnail(wikiTitle) {
     const data = await res.json();
     const src = data.originalimage?.source || data.thumbnail?.source || '';
     if (!src || isBadImage(src)) return '';
-    return `https://images.weserv.nl/?url=${src.replace('https://', '')}&w=800`;
+    const final = `https://images.weserv.nl/?url=${src.replace('https://', '')}&w=800`;
+    if (excludeUrl && final === excludeUrl) return '';
+    return final;
   } catch {
     return '';
   }
+}
+
+export async function fetchFreshImage(wikiTitle, excludeUrl = '') {
+  return getWikiThumbnail(wikiTitle, excludeUrl);
 }
 
 // ── Fetch a batch of items ────────────────────────────────────────────────────

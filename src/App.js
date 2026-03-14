@@ -9,6 +9,7 @@ import {
   getLeaderboard, addLeaderboardEntry, clearLeaderboard,
   getDifficulty, setDifficulty,
   addReport,
+  fetchFreshImage, getCroppedBadUrls, addCroppedBadUrl,
 } from './gameService';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ const REPORT_REASONS = [
   'Wrong image for this item',
   'Image won\'t load / broken link',
   'Text or watermark covering photo',
-  'Inappropriate or offensive content',
+  'Badly cropped / cut off',
   'Other',
 ];
 
@@ -59,12 +60,15 @@ function ReportModal({ item, onClose, onSubmit }) {
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     if (!reason) return;
-    onSubmit(reason, note);
+    setLoading(true);
+    await onSubmit(reason, note);
+    setLoading(false);
     setDone(true);
-    setTimeout(onClose, 1400);
+    setTimeout(onClose, 1200);
   };
 
   return (
@@ -73,7 +77,12 @@ function ReportModal({ item, onClose, onSubmit }) {
         {done ? (
           <div style={{ textAlign: 'center', padding: '16px 0' }}>
             <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-            <div style={{ color: '#4ade80', fontSize: 15 }}>Thanks for the report!</div>
+            <div style={{ color: '#4ade80', fontSize: 15 }}>Got it! Loading a fresh photo...</div>
+          </div>
+        ) : loading ? (
+          <div style={{ textAlign: 'center', padding: '16px 0' }}>
+            <Spinner color='#f59e0b' size={28} />
+            <div style={{ color: T.muted, fontSize: 13, marginTop: 10 }}>Fetching a replacement...</div>
           </div>
         ) : (
           <>
@@ -95,7 +104,7 @@ function ReportModal({ item, onClose, onSubmit }) {
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
               <Btn color={T.border2} onClick={onClose} style={{ padding: '8px 18px' }}>Cancel</Btn>
-              <Btn fill color='#ef4444' onClick={submit} disabled={!reason} style={{ padding: '8px 18px' }}>Submit</Btn>
+              <Btn fill color='#ef4444' onClick={submit} disabled={!reason || loading} style={{ padding: '8px 18px' }}>Submit</Btn>
             </div>
           </>
         )}
@@ -246,6 +255,11 @@ function LeaderboardScreen({ onBack }) {
                   <div style={{ fontSize: 15, color: T.text, fontFamily: T.font }}>{e.player}</div>
                   <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
                     {cat?.emoji} {cat?.name} · {e.questions} questions
+                    {e.difficulty && e.difficulty !== 'medium' && (
+                      <span style={{ marginLeft: 6, color: e.difficulty === 'hard' ? '#ef4444' : '#10b981' }}>
+                        · {e.difficulty === 'hard' ? '💀 Hard' : '😊 Easy'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -274,12 +288,19 @@ function LeaderboardScreen({ onBack }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MODE SELECT + PLAYER NAMES
 // ─────────────────────────────────────────────────────────────────────────────
+const DIFF_OPTIONS = [
+  { id: 'easy',   label: '😊 Easy',   sub: '1× points',   color: '#10b981' },
+  { id: 'medium', label: '🧠 Medium', sub: '1.5× points', color: '#f59e0b' },
+  { id: 'hard',   label: '💀 Hard',   sub: '2× points',   color: '#ef4444' },
+];
+
 function ModeScreen({ categoryId, onStart, onBack }) {
   const cat = getCategoryById(categoryId);
   const [mode, setMode] = useState(null);
   const [playerCount, setPlayerCount] = useState(2);
   const [names, setNames] = useState(['', '', '', '']);
   const [showSuggestions, setShowSuggestions] = useState(null);
+  const [localDiff, setLocalDiff] = useState(() => getDifficulty());
   const known = getKnownPlayers();
   const defaults = ['You', 'Heaven', 'Player 3', 'Player 4'];
 
@@ -287,7 +308,8 @@ function ModeScreen({ categoryId, onStart, onBack }) {
     const finalNames = (mode === 'solo' ? names.slice(0, 1) : names.slice(0, playerCount))
       .map((n, i) => n.trim() || defaults[i]);
     finalNames.forEach(savePlayerName);
-    onStart({ mode, players: finalNames, categoryId });
+    setDifficulty(localDiff);
+    onStart({ mode, players: finalNames, categoryId, difficulty: localDiff });
   };
 
   if (!mode) return (
@@ -352,6 +374,19 @@ function ModeScreen({ categoryId, onStart, onBack }) {
           </div>
         ))}
       </div>
+      {/* Difficulty picker */}
+      <div style={{ marginBottom: 22 }}>
+        <div style={{ fontSize: 10, letterSpacing: 4, textTransform: 'uppercase', color: T.muted, marginBottom: 10, textAlign: 'center' }}>Difficulty</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {DIFF_OPTIONS.map(d => (
+            <div key={d.id} onClick={() => setLocalDiff(d.id)}
+              style={{ flex: 1, padding: '11px 8px', border: `1px solid ${localDiff === d.id ? d.color : T.border2}`, borderRadius: 4, cursor: 'pointer', background: localDiff === d.id ? `${d.color}18` : 'transparent', textAlign: 'center', transition: 'all .15s' }}>
+              <div style={{ fontSize: 13, color: localDiff === d.id ? d.color : T.muted, marginBottom: 2 }}>{d.label}</div>
+              <div style={{ fontSize: 10, color: localDiff === d.id ? d.color : T.dim, letterSpacing: 1 }}>{d.sub}</div>
+            </div>
+          ))}
+        </div>
+      </div>
       <Btn fill color={cat.color} onClick={start}>Let's Go {cat.emoji}</Btn>
     </div>
   );
@@ -363,10 +398,14 @@ function ModeScreen({ categoryId, onStart, onBack }) {
 const BATCH_SIZE = 3;
 const CHECKPOINT = 10;
 
+const DIFF_MULT = { easy: 1, medium: 1.5, hard: 2 };
+
 function GameScreen({ config, onHome }) {
-  const { mode, players, categoryId } = config;
+  const { mode, players, categoryId, difficulty = 'medium' } = config;
   const cat = getCategoryById(categoryId);
   const isSolo = mode === 'solo';
+  const mult = DIFF_MULT[difficulty] || 1;
+  const diffInfo = DIFF_OPTIONS.find(d => d.id === difficulty) || DIFF_OPTIONS[1];
 
   const [queue, setQueue]       = useState([]);
   const [fetching, setFetching] = useState(false);
@@ -386,8 +425,26 @@ function GameScreen({ config, onHome }) {
   const [bestStreak, setBest]   = useState(0);
   const [maxPoss, setMaxPoss]   = useState(0);
   const [reporting, setReporting] = useState(false);
+  const [croppedUrls, setCroppedUrls] = useState(() => getCroppedBadUrls());
 
   const bgFetchRef = useRef(false);
+
+  const handleReport = async (reason, note) => {
+    const currentItem = queue[localIdx];
+    addReport(currentItem, reason, note);
+    if (reason === 'Badly cropped / cut off') {
+      // Flag this URL so it renders as contain instead of cover
+      addCroppedBadUrl(currentItem.image);
+      setCroppedUrls(getCroppedBadUrls());
+    } else {
+      // Fetch a fresh replacement image for this question
+      const fresh = await fetchFreshImage(currentItem.wikiTitle || currentItem.name, currentItem.image);
+      if (fresh) {
+        setQueue(q => q.map((it, i) => i === localIdx ? { ...it, image: fresh } : it));
+        setImgSt('loading');
+      }
+    }
+  };
 
   const loadBatch = useCallback(async (initial = false) => {
     if (bgFetchRef.current) return;
@@ -443,13 +500,14 @@ function GameScreen({ config, onHome }) {
   };
 
   const reveal = () => {
-    const pts = guesses.map(g => scoreGuess(g, item));
-    const mp = maxPoints();
+    const rawPts = guesses.map(g => scoreGuess(g, item));
+    const pts = rawPts.map(p => Math.round(p * mult));
+    const mp = Math.round(maxPoints() * mult);
     setRpts(pts);
     setScores(s => s.map((v, i) => v + pts[i]));
     setMaxPoss(m => m + mp);
     if (isSolo) {
-      const got = pts[0] >= mp;
+      const got = rawPts[0] >= maxPoints();
       const ns = got ? streak + 1 : 0;
       setStreak(ns);
       setBest(b => Math.max(b, ns));
@@ -484,9 +542,9 @@ function GameScreen({ config, onHome }) {
   const endGame = () => {
     if (isSolo) {
       updateSoloStats(categoryId, scores[0], maxPoss);
-      addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId);
+      addLeaderboardEntry(players[0], scores[0], maxPoss, qIdx, categoryId, difficulty);
     } else {
-      players.forEach((p, i) => addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId));
+      players.forEach((p, i) => addLeaderboardEntry(p, scores[i], maxPoss, qIdx, categoryId, difficulty));
     }
     setPhase('over');
   };
@@ -597,7 +655,7 @@ function GameScreen({ config, onHome }) {
           {[1,2,3].map(d => (
             <div key={d} style={{ width: 8, height: 8, borderRadius: '50%', background: d <= (item.difficulty || 2) ? cat.color : T.border }} />
           ))}
-          <span style={{ fontSize: 10, color: cat.color, letterSpacing: 2 }}>MAX {mp}PTS</span>
+          <span style={{ fontSize: 10, color: diffInfo.color, letterSpacing: 2 }}>{diffInfo.label} ×{mult} · MAX {mp}PTS</span>
         </div>
       )}
 
@@ -617,7 +675,7 @@ function GameScreen({ config, onHome }) {
         )}
         {item && <img src={item.image} alt={item.imageAlt || ''}
           onLoad={() => setImgSt('loaded')} onError={() => setImgSt('error')}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: imgSt === 'loaded' ? 1 : 0, transition: 'opacity .6s' }} />}
+          style={{ width: '100%', height: '100%', objectFit: croppedUrls.includes(item.image) ? 'contain' : 'cover', opacity: imgSt === 'loaded' ? 1 : 0, transition: 'opacity .6s' }} />}
         {imgSt === 'loaded' && phase === 'playing' && (
           <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent,rgba(0,0,0,.7))', padding: '24px 14px 10px', fontSize: 10, letterSpacing: 3, color: '#9ca3af', textTransform: 'uppercase' }}>
             {cat.emoji} What / Where Is This?
@@ -701,7 +759,7 @@ function GameScreen({ config, onHome }) {
         <ReportModal
           item={item}
           onClose={() => setReporting(false)}
-          onSubmit={(reason, note) => addReport(item, reason, note)}
+          onSubmit={handleReport}
         />
       )}
 

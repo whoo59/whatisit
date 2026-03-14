@@ -29,11 +29,13 @@ Each item must have a "difficulty" field: 1 = common animal, 2 = less known, 3 =
     name: 'Deep Sea Creatures',
     description: 'The alien world beneath the ocean surface',
     color: '#3b82f6',
-    prompt: `Generate exactly {count} deep sea and ocean creatures — the weirder the better. Include bioluminescent species, bizarre adaptations, giant creatures. Examples: anglerfish, mantis shrimp, mimic octopus, vampire squid, giant isopod, barreleye fish, goblin shark, giant oarfish.
+    prompt: `Generate exactly {count} ocean and deep sea creatures — the weirder the better. IMPORTANT: Prioritize species that have real **underwater photography** of the living creature (taken by divers, researchers, or submersibles). Include bioluminescent species, bizarre adaptations, giant creatures. Examples: mantis shrimp, mimic octopus, cuttlefish, leafy sea dragon, nudibranch, vampire squid, giant isopod, barreleye fish, goblin shark, giant oarfish, dumbo octopus, frogfish, lionfish, blue-ringed octopus.
 
-For wikiTitle, provide the exact Wikipedia article title (e.g. 'Anglerfish', 'Mantis_shrimp', 'Giant_isopod').
+Avoid purely abyssal species only known from dead specimens or lab photos. Choose creatures that are widely photographed in their natural underwater habitat.
 
-Each item must have a "difficulty" field: 1 = well known sea creature, 2 = moderately known, 3 = very obscure deep sea (used for display only).`
+For wikiTitle, provide the exact Wikipedia article title (e.g. 'Mantis_shrimp', 'Mimic_octopus', 'Giant_isopod').
+
+Each item must have a "difficulty" field: 1 = well known sea creature, 2 = moderately known, 3 = very obscure (used for display only).`
   },
   {
     id: 'cities',
